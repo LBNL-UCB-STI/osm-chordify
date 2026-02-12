@@ -5,36 +5,31 @@ Download and prepare OSM network data.
 @author: haitamlaarabi, cristian.poliziani, zaneedell
 """
 import os
-import pickle
-import subprocess
-
-import osmnx as ox
 
 from osm_chordify.osm.graph import download_and_prepare_osm_network
-from osm_chordify.osm.diagnostics import check_invalid_coordinates, scan_network_directories_for_ways, check_duplicate_edge_ids
-from osm_chordify.osm.xml import save_graph_xml
+from osm_chordify.osm.diagnostics import check_invalid_coordinates, scan_network_directories_for_ways
+from osm_chordify.osm.export import export_network
 from osm_chordify.study_area_config import get_area_config, generate_network_name
-
-# Get the absolute path to the directory containing this script
-current_dir = os.path.dirname(os.path.abspath(__file__))
 
 
 def download_and_build_network(study_area_config):
-    """Main execution function."""
-    # Generate configuration name and prepare directory
+    """Download, process, validate, and export an OSM network.
+
+    This is the high-level script entrypoint that orchestrates:
+    1. Downloading and processing the network via ``download_and_prepare_osm_network``
+    2. Validating coordinates
+    3. Exporting to all formats via ``export_network``
+
+    Parameters
+    ----------
+    study_area_config : dict
+        Full study-area configuration (as returned by ``get_area_config``).
+    """
     config_name = generate_network_name(study_area_config)
     work_dir = study_area_config["work_dir"]
     network_dir = f'{work_dir}/network/{config_name}'
-    os.makedirs(network_dir, exist_ok=True)
 
-    # Define output file paths
-    graphml_network = f'{network_dir}/{config_name}.graphml'
-    pkl_network = f'{network_dir}/{config_name}.pkl'
-    gpkg_network = f'{network_dir}/{config_name}.gpkg'
-    osm_network = f'{network_dir}/{config_name}.osm'
-    pbf_network = f'{network_dir}/{config_name}.osm.pbf'
-    geojson_network = f'{network_dir}/{config_name}.osm.geojson'
-
+    # Step 1: Download and process
     print(f'Downloading and preparing OSM-based {config_name} network...')
     g_network = download_and_prepare_osm_network(
         study_area_config["network"],
@@ -43,66 +38,20 @@ def download_and_build_network(study_area_config):
         work_dir
     )
 
-    # Save GraphML and PKL formats
-    ox.save_graphml(g_network, filepath=graphml_network)
-    print(f"GRAPHML Network saved to '{graphml_network}'.")
-
-    with open(pkl_network, 'wb') as f:
-        pickle.dump(g_network, f)
-    print(f"PKL Network saved to '{pkl_network}'.")
-
-    # Check for invalid coordinates
+    # Step 2: Validate
     has_invalid, invalid_nodes = check_invalid_coordinates(g_network)
     if has_invalid:
         print(f"WARNING: Found {len(invalid_nodes)} nodes with invalid coordinates.")
     else:
         print("All node coordinates are valid.")
 
-    # Extract nodes and edges as GeoDataFrames and verify CRS
-    nodes, edges = ox.graph_to_gdfs(g_network)
-    if nodes.crs != edges.crs:
-        print("\nWARNING: Nodes and edges have different CRS!")
-        print(f"Nodes CRS: {nodes.crs}")
-        print(f"Edges CRS: {edges.crs}")
-
-    # Save GPKG Network
-    print(f"Converting GraphML Network to GPKG Network...")
-    ox.save_graph_geopackage(g_network, filepath=gpkg_network)
-    print(f"GPKG Network saved to '{gpkg_network}'.")
-
-    # Create OSM Network
-    print(f"Creating OSM Network...")
-
-    g_osm = ox.graph_from_gdfs(nodes, edges, graph_attrs=g_network.graph)
-    save_graph_xml(
-        g_osm,
-        filepath=osm_network,
-        edge_tags=[
-            'highway', 'lanes', 'maxspeed', 'name', 'oneway', 'length',
-            'tunnel', 'bridge', 'junction', 'edge_id', 'access', 'osm_id',
-            'motor_vehicle', 'vehicle', 'motorcar',
-            'access:car', 'access:vehicle', 'access:motor_vehicle',
-            'cycleway', 'cycleway:left', 'cycleway:right',
-            'sidewalk', 'foot', 'bicycle',
-            'lts'  # Level of Traffic Stress if available
-        ],
-        edge_tag_aggs=[('length', 'sum')]
+    # Step 3: Export all formats
+    export_network(
+        g_network,
+        output_dir=network_dir,
+        name=config_name,
+        edge_tag_aggs=[('length', 'sum')],
     )
-    print(f"OSM Network saved to '{osm_network}'.")
-
-    # Convert to PBF and GeoJSON formats
-    cmd = (
-        f"osmium cat {osm_network} -o - --output-format pbf,compression=zlib "
-        f"| osmium sort -F pbf - -o {pbf_network} --overwrite"
-    )
-    subprocess.run(cmd, shell=True, check=True)
-    print(f"OSM PBF File saved to '{pbf_network}'")
-
-    # Use the configuration file with ogr2ogr
-    osm_conf_path = f'{current_dir}/_osm_conf.ini'
-    cmd2 = f'ogr2ogr -f GeoJSON "{geojson_network}" "{pbf_network}" lines --config OSM_CONFIG_FILE "{osm_conf_path}"'
-    subprocess.run(cmd2, shell=True, check=True)
-    print(f"OSM GEOJSON File saved to '{geojson_network}'")
 
 
 def main():
