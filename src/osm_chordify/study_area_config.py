@@ -340,6 +340,17 @@ sfbay_area_config = {
         "cbg_id": "GEOID",
     },
 
+    "polygon_grid": {
+        "path": "inmap/ISRM/isrm_polygon.shp",
+        "id_col": "isrm",
+    },
+
+    "polygon_network": {
+        "path": "",
+        "id_col": "link_id",
+        "length_col": "length",
+    },
+
     "network": {
         "osmnx_settings": osmnx_settings,
         "weight_limits": weight_limits, # Vehicle weight classifications (FHWA)
@@ -569,6 +580,10 @@ seattle_area_config = {
         "taz_id": "taz_id",
         "cbg_id": "GEOID",
     },
+
+    "polygon_grid": {},
+
+    "polygon_network": {},
 
     "network": {
         "osmnx_settings": osmnx_settings,

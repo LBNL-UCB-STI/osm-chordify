@@ -5,6 +5,50 @@ import re
 import pandas as pd
 
 
+def parse_other_tags(other_tags):
+    """Parse the 'other_tags' column from OSM PBF file to extract key-value pairs.
+
+    Parameters
+    ----------
+    other_tags : str or None
+        Raw other_tags string in ``"key"=>"value"`` format.
+
+    Returns
+    -------
+    dict
+        Parsed key-value pairs, or empty dict for null/empty input.
+    """
+    if not other_tags or pd.isna(other_tags):
+        return {}
+    pattern = r'"([^"]+)"=>"([^"]+)"'
+    matches = re.findall(pattern, other_tags)
+    return {key: value for key, value in matches}
+
+
+def extract_tag_as_float(tags_dict, key):
+    """Extract a numeric value from a parsed tags dictionary.
+
+    Parameters
+    ----------
+    tags_dict : dict
+        Dictionary of tag key-value pairs (from :func:`parse_other_tags`).
+    key : str
+        Tag key to look up (e.g. ``"length"``).
+
+    Returns
+    -------
+    float or None
+        The numeric value, or ``None`` if the key is missing or not numeric.
+    """
+    value_str = tags_dict.get(key, None)
+    if value_str is None:
+        return None
+    try:
+        return float(value_str)
+    except (ValueError, TypeError):
+        return None
+
+
 def convert_weight(value: float, from_unit: str, to_unit: str) -> float:
     """Convert weight between different units."""
     # Conversion factors
