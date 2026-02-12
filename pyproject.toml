@@ -9,7 +9,14 @@ description = "OSM data is an improv jam session, osm-chordify lets you chop it 
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{name = "Haitam Laarabi"}]
+license = {file = "LICENSE"}
 dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/osm_chordify"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
