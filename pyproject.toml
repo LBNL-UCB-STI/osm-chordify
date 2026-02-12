@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "osm-chordify"
+version = "0.1.0"
+description = "OSM data is an improv jam session, osm-chordify lets you chop it up, cut the takes, and bounce exactly what you need for routing, simulation, and GIS workflows."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Haitam Laarabi"}]
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/osm_chordify"]
