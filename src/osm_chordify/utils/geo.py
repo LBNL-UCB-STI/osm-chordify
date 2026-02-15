@@ -7,6 +7,53 @@ import pyproj
 from osmnx import settings
 
 
+def name_osm_network(area_name, graph_layers, strongly_connected):
+    """
+    Generate an OSM product name from study-area parameters.
+
+    Format: ``{area}[-{geo}{density}][-ferry]-{conn}Conn-network``
+
+    Parameters
+    ----------
+    area_name : str
+        Study area name (e.g. ``"sfbay"``).
+    graph_layers : dict
+        Graph layer definitions (must include ``"residential"`` key if used).
+    strongly_connected : bool
+        Whether the network uses strongly connected components.
+
+    Returns
+    -------
+    str
+    """
+    if "residential" in graph_layers:
+        density = str(graph_layers["residential"]["min_density_per_km2"])
+        res_part = f"-{graph_layers['residential']['geo_level']}{density}"
+    else:
+        res_part = ""
+
+    conn = "strong" if strongly_connected else "weak"
+    ferry = "-ferry" if "ferry" in graph_layers else ""
+
+    return f"{area_name}{res_part}{ferry}-{conn}Conn-network"
+
+
+def create_osm_highway_filter(highway_types):
+    """Convert a list of highway types to an OSM custom filter string.
+
+    Parameters
+    ----------
+    highway_types : list[str]
+        Highway type strings (e.g. ``["motorway", "trunk", "primary"]``).
+
+    Returns
+    -------
+    str
+        Filter in the format ``'["highway"~"type1|type2|..."]'``.
+    """
+    return f'["highway"~"{"|".join(highway_types)}"]'
+
+
 def meters_to_degrees(lon, lat, utm_epsg, buffer_meters):
     """
     Calculate the equivalent buffer distance in degrees for a given buffer in meters,
