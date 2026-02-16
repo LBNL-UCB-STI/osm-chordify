@@ -18,20 +18,16 @@ import warnings
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import networkx as nx
-import osmnx as ox
 import pandas as pd
 
-from osm_chordify.osm.diagnostics import (
-    check_invalid_coordinates,
-    scan_network_directories_for_ways,
-)
+from osm_chordify.osm.diagnostics import check_invalid_coordinates
 from osm_chordify.osm.export import export_network
 from osm_chordify.osm.graph import download_and_prepare_osm_network
 from osm_chordify.osm.intersect import (
-    intersect_edges_with_polygons,
+    intersect_osm_with_zones,
     load_osm_edges,
 )
-from osm_chordify.utils.geo import create_osm_highway_filter, name_osm_network
+from osm_chordify.utils.geo import name_osm_network
 from osm_chordify.utils.io import save_dataframe, save_geodataframe
 from osm_chordify.utils.network import map_network_to_intersection
 
@@ -46,7 +42,7 @@ logger = logging.getLogger(__name__)
 # OSM download & build
 # ---------------------------------------------------------------------------
 
-def download_and_build_osm(
+def build_osm_by_pop_density(
     work_dir, area_name, osm_config, area_config, geo_config,
 ):
     """Download, process, validate, and export an OSM network.
@@ -119,7 +115,7 @@ def intersect_network_geom_with_zones(
     logger.info("Loading OSM edges")
     edges_gdf = load_osm_edges(osm_geojson_path, osm_gpkg_path)
 
-    result_gdf = intersect_edges_with_polygons(
+    result_gdf = intersect_osm_with_zones(
         polygons_gdf=polygons_gdf,
         edges_gdf=edges_gdf,
         polygon_id_col=id_col,
@@ -411,138 +407,3 @@ def diagnose_osm(pbf_path, epsg_utm):
 
 
 # ---------------------------------------------------------------------------
-# Combined example
-# ---------------------------------------------------------------------------
-
-def main():
-    """Example: sfbay full download -> intersect -> map pipeline."""
-    work_dir = os.path.expanduser("~/Workspace/Simulation/sfbay")
-    utm_epsg = 26910
-
-    osm_highways = [
-        "motorway", "motorway_link", "trunk", "trunk_link",
-        "primary", "primary_link", "secondary", "secondary_link",
-        "tertiary", "tertiary_link", "unclassified",
-    ]
-    osm_residential = ["residential"]
-
-    area_config = {
-        "name": "sfbay",
-        "state_fips": "06",
-        "county_fips": [
-            "001", "013", "041", "055", "075", "081", "085", "095", "097",
-        ],
-        "census_year": 2018,
-    }
-
-    geo_config = {
-        "utm_epsg": utm_epsg,
-        "taz_shp": "geo/shp/sfbay-tazs-epsg-26910.shp",
-        "taz_id": "taz1454",
-        "cbg_id": "GEOID",
-    }
-
-    osm_config = {
-        "osmnx_settings": {
-            "log_console": True,
-            "use_cache": True,
-            "cache_only_mode": False,
-            "all_oneway": True,
-            "requests_timeout": 180,
-            "overpass_memory": None,
-            "max_query_area_size": 50 * 1000 * 50 * 1000,
-            "overpass_rate_limit": False,
-            "overpass_max_attempts": 3,
-            "useful_tags_way": list(ox.settings.useful_tags_way) + [
-                "maxweight", "hgv", "maxweight:hgv", "maxlength",
-                "motorcar", "motor_vehicle", "goods", "truck",
-            ],
-            "overpass_url": "https://overpass-api.de/api",
-        },
-        "weight_limits": {"unit": "lbs", "mdv_max": 26000, "hdv_max": 80000},
-        "download_enabled": True,
-        "tolerance": 2,
-        "strongly_connected_components": False,
-        "graph_layers": {
-            "main": {
-                "geo_level": "county",
-                "custom_filter": create_osm_highway_filter(list(set(osm_highways))),
-                "buffer_zone_in_meters": 200,
-            },
-            "residential": {
-                "min_density_per_km2": 5500,
-                "geo_level": "cbg",
-                "custom_filter": create_osm_highway_filter(
-                    list(set(osm_highways) | set(osm_residential))
-                ),
-                "buffer_zone_in_meters": 20,
-            },
-        },
-    }
-
-    # Step 1: Download and build the OSM network
-    download_and_build_osm(
-        work_dir=work_dir,
-        area_name=area_config["name"],
-        osm_config=osm_config,
-        area_config=area_config,
-        geo_config=geo_config,
-    )
-
-    scan_network_directories_for_ways(os.path.expanduser(f'{work_dir}/network'))
-
-    # Step 2: Intersect polygon grid with OSM edges
-    graph_layers = osm_config["graph_layers"]
-    osm_name = name_osm_network(
-        "sfbay", graph_layers,
-        osm_config["strongly_connected_components"],
-    )
-    osm_dir = f'{work_dir}/network/{osm_name}'
-
-    osm_geojson = os.path.expanduser(f"{osm_dir}/{osm_name}.osm.geojson")
-    osm_gpkg = os.path.expanduser(f"{osm_dir}/{osm_name}.gpkg")
-
-    grid_path = os.path.expanduser(f"{work_dir}/inmap/ISRM/isrm_polygon.shp")
-    id_col = "isrm"
-
-    out_dir = os.path.expanduser(f"{work_dir}/polygon-{osm_name}")
-    os.makedirs(out_dir, exist_ok=True)
-    intersection_path = os.path.expanduser(
-        f"{out_dir}/polygon-{osm_name}.geojson"
-    )
-
-    if not os.path.exists(intersection_path):
-        intersect_network_geom_with_zones(
-            grid_path=grid_path,
-            id_col=id_col,
-            osm_geojson_path=osm_geojson,
-            osm_gpkg_path=osm_gpkg,
-            epsg_utm=utm_epsg,
-            output_path=intersection_path,
-        )
-
-    # Step 3: Map tabular network to intersection
-    net_csv = os.path.expanduser(f"{osm_dir}/network.csv.gz")
-    mapping_output = os.path.expanduser(
-        f"{out_dir}/polygon-network-mapping.geojson"
-    )
-    if not os.path.exists(mapping_output):
-        map_osm_with_beam_network(
-            network_path=net_csv,
-            intersection_path=intersection_path,
-            id_col="polygon_id",
-            osm_id_col="attributeOrigId",
-            length_col="linkLength",
-            link_id_col="linkId",
-            output_path=mapping_output,
-        )
-
-    # Step 4: Run OSM diagnostics
-    pbf_path = os.path.expanduser(
-        f"{osm_dir}/{osm_name}.osm.pbf"
-    )
-    diagnose_osm(pbf_path, utm_epsg)
-
-
-if __name__ == "__main__":
-    main()

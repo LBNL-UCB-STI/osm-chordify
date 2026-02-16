@@ -6,7 +6,7 @@ This module provides two functions:
   and returns a single GeoDataFrame with ``osm_id``, ``edge_id``,
   ``edge_length``, and ``geometry``.
 
-* :func:`intersect_edges_with_polygons` — intersects *any* polygon grid
+* :func:`intersect_osm_with_zones` — intersects *any* polygon grid
   (ISRM, TAZ, census tracts, …) with OSM edges and returns proportional
   lengths per polygon.
 """
@@ -82,7 +82,7 @@ def load_osm_edges(osm_geojson_path, osm_gpkg_path):
     return edges_gdf
 
 
-def intersect_edges_with_polygons(
+def intersect_osm_with_zones(
     polygons_gdf,
     edges_gdf,
     polygon_id_col,
@@ -216,49 +216,3 @@ def intersect_edges_with_polygons(
     result_gdf = result_gdf.to_crs(epsg=WGS84_EPSG)
     logger.info("Converted results back to WGS 84")
     return result_gdf
-
-
-def intersect_network_with_polygons(
-    polygons_gdf,
-    network_gdf,
-    polygon_id_col,
-    network_id_col,
-    network_length_col,
-    epsg_utm,
-):
-    """Spatially intersect network link geometries with polygon geometries.
-
-    Same approach as :func:`intersect_edges_with_polygons` but for an
-    arbitrary network GeoDataFrame (not necessarily OSM).  Each link that
-    crosses a polygon boundary is split and the proportional length is
-    computed.
-
-    Parameters
-    ----------
-    polygons_gdf : gpd.GeoDataFrame
-        Polygon grid.  Must contain *polygon_id_col* and a geometry column.
-    network_gdf : gpd.GeoDataFrame
-        Network links with line geometries.  Must contain
-        *network_id_col*, *network_length_col*, and ``geometry``.
-    polygon_id_col : str
-        Name of the unique-ID column in *polygons_gdf*.
-    network_id_col : str
-        Name of the unique-ID column in *network_gdf*.
-    network_length_col : str
-        Name of the length column in *network_gdf*.
-    epsg_utm : int
-        EPSG code for the UTM projection used for length calculations.
-
-    Returns
-    -------
-    gpd.GeoDataFrame
-        Columns: ``polygon_id``, ``network_id``,
-        ``original_link_length``, ``proportion``,
-        ``proportional_length``, ``geometry``.  CRS is WGS 84.
-
-    Raises
-    ------
-    ValueError
-        If required columns are missing from the input GeoDataFrames.
-    """
-    raise NotImplementedError

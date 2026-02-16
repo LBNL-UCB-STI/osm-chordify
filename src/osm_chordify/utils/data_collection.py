@@ -46,7 +46,6 @@ def collect_census_data(state_fips_code, county_fips_codes, year, census_data_fi
     try:
         with open(api_key_path, 'r') as f:
             census_api_key = f.read().strip()
-            print(f"Your Census API key is [{census_api_key}]")
     except FileNotFoundError:
         raise FileNotFoundError(
             f"Census API key file not found at {api_key_path}. Please create this file with your API key.")
@@ -122,63 +121,6 @@ def collect_census_data(state_fips_code, county_fips_codes, year, census_data_fi
         raise
 
 
-def download_tract_census_data(state_fips_code, county_fips_codes, year, census_data_file):
-    """
-    Download census tract population data from the Census Bureau's ACS 5-year estimates.
-
-    Parameters
-    ----------
-    state_fips_code : str
-        FIPS code for the state
-    county_fips_codes : list
-        List of county FIPS codes
-    year : int
-        Reference year for population estimates (July 1st reference date)
-    census_data_file: str
-        Path to the CSV file where population data will be saved
-
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame containing population data for census tracts
-    """
-    from cenpy import products
-    if not os.path.exists(census_data_file):
-        # Connect to Census API
-        try:
-            conn = products.APIConnection(f"ACSDT5Y{year}")
-            # Get population data for tracts
-            pop_data = None
-            for county_fips in county_fips_codes:
-                tract_data = conn.query(
-                    ['B01003_001E'],  # Total population estimate
-                    geo_unit='tract',
-                    geo_filter={
-                        "state": state_fips_code,
-                        "county": county_fips
-                    }
-                )
-                pop_data = pd.concat([pop_data, tract_data]) if pop_data is not None else tract_data
-
-            # Rename columns
-            pop_data = pop_data.rename(columns={'B01003_001E': 'population'})
-
-            # Create GEOID by combining state, county, and tract
-            pop_data['GEOID'] = (pop_data['state'] + pop_data['county'] + pop_data['tract']).astype(str)
-
-            # Convert population to numeric
-            pop_data['population'] = pd.to_numeric(pop_data['population'], errors='coerce')
-            pop_data.to_csv(census_data_file, index=False)
-
-        except Exception as e:
-            print(f"Failed to retrieve population data: {e}")
-            raise
-    else:
-        pop_data = pd.read_csv(census_data_file, dtype={'GEOID': str})
-
-    return pop_data
-
-
 def collect_tract_boundaries(state_fips_code, county_fips_codes, year):
     """
     Download census tract boundaries from TIGER/Line shapefiles.
@@ -210,6 +152,28 @@ def collect_tract_boundaries(state_fips_code, county_fips_codes, year):
     return geo_data
 
 def collect_geographic_boundaries(state_fips_code, county_fips_codes, year, area_name, geo_level, work_dir):
+    """Collect geographic boundaries at the specified level, caching to GeoJSON.
+
+    Parameters
+    ----------
+    state_fips_code : str
+        FIPS code for the state.
+    county_fips_codes : list
+        List of county FIPS codes to filter by.
+    year : int
+        Reference year for boundary data.
+    area_name : str
+        Human-readable name for the study area (used in the output filename).
+    geo_level : str
+        Geographic level: ``'county'``, ``'cbg'``, ``'tract'``, or ``'taz'``.
+    work_dir : str
+        Directory where the cached GeoJSON file will be stored.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Boundaries in WGS 84 (EPSG:4326).
+    """
     study_area_boundary_geo_path = f"{work_dir}/{area_name}_{geo_level}_{year}_wgs84.geojson"
     if os.path.exists(study_area_boundary_geo_path):
         return gpd.read_file(study_area_boundary_geo_path)
@@ -238,48 +202,65 @@ def collect_geographic_boundaries(state_fips_code, county_fips_codes, year, area
         return selected_geo_wgs84
 
 def collect_taz_boundaries(state_fips_code, year, output_dir):
+    """Download and read TAZ boundaries from a TIGER/Line shapefile ZIP.
+
+    Parameters
+    ----------
+    state_fips_code : str
+        FIPS code for the state.
+    year : int
+        Reference year for boundaries.
+    output_dir : str
+        Directory to cache the downloaded ZIP file.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        TAZ boundary geometries.
+    """
+    import shutil
+    import tempfile
     from zipfile import ZipFile
+
     state_geo_zip = output_dir + f"/tl_{year}_{state_fips_code}_taz10.zip"
     if not os.path.exists(state_geo_zip):
         state_geo_zip = download_taz_shapefile(state_fips_code, year, output_dir)
-    """
-    Read a shapefile from a ZIP archive, filter geometries by county FIPS codes,
-    and write the result to a GeoJSON file.
 
-    Parameters:
-    - zip_file_path: Path to the ZIP file containing the shapefile.
-    - county_fips_codes: List of county FIPS codes to filter by.
-    - output_geojson_path: Path to save the filtered data as a GeoJSON file.
-    """
     # Extract the shapefile from the ZIP archive
     with ZipFile(state_geo_zip, 'r') as zip_ref:
-        # Extract all files to a temporary directory
-        temp_dir = "temp_shp"
-        zip_ref.extractall(temp_dir)
+        temp_dir = tempfile.mkdtemp()
+        try:
+            zip_ref.extractall(temp_dir)
 
-        # Find the .shp file in the extracted files
-        shapefile_name = [f for f in os.listdir(temp_dir) if f.endswith('.shp')][0]
-        shapefile_path = os.path.join(temp_dir, shapefile_name)
+            # Find the .shp file in the extracted files
+            shapefile_name = [f for f in os.listdir(temp_dir) if f.endswith('.shp')][0]
+            shapefile_path = os.path.join(temp_dir, shapefile_name)
 
-        # Read the shapefile into a GeoDataFrame
-        gdf = gpd.read_file(shapefile_path)
+            # Read the shapefile into a GeoDataFrame
+            gdf = gpd.read_file(shapefile_path)
+        finally:
+            shutil.rmtree(temp_dir)
 
-        # Clean up the temporary directory
-        for filename in os.listdir(temp_dir):
-            os.remove(os.path.join(temp_dir, filename))
-        os.rmdir(temp_dir)
-
-        return gdf
+    return gdf
 
 def download_taz_shapefile(state_fips_code, year, output_dir):
-    import requests
-    """
-    Download TAZ shapefiles for a given state-level FIPS code.
+    """Download TAZ shapefiles for a given state-level FIPS code.
 
-    Parameters:
-    - fips_code: String or integer representing the state-level FIPS code.
-    - output_dir: Directory to save the downloaded ZIP file.
+    Parameters
+    ----------
+    state_fips_code : str
+        State-level FIPS code.
+    year : int
+        Reference year for the shapefile.
+    output_dir : str
+        Directory to save the downloaded ZIP file.
+
+    Returns
+    -------
+    str
+        Path to the downloaded ZIP file.
     """
+    import requests
     # Ensure the FIPS code is a string, padded to 2 characters
     fips_code_str = str(state_fips_code).zfill(2)
 

@@ -1,11 +1,15 @@
-from osm_chordify.osm.graph import download_and_prepare_osm_network as download_osm_network
-from osm_chordify.osm.export import export_network
-from osm_chordify.osm.intersect import intersect_edges_with_polygons
-from osm_chordify.main import download_and_build_osm
+from osm_chordify.main import (
+    build_osm_by_pop_density,
+    intersect_network_geom_with_zones,
+    map_osm_with_beam_network,
+    diagnose_osm,
+)
+from osm_chordify.osm.intersect import intersect_osm_with_zones
 
 __all__ = [
-    "download_osm_network",
-    "export_network",
-    "intersect_edges_with_polygons",
-    "download_and_build_osm",
+    "build_osm_by_pop_density",
+    "intersect_network_geom_with_zones",
+    "map_osm_with_beam_network",
+    "diagnose_osm",
+    "intersect_osm_with_zones",
 ]

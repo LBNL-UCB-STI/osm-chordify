@@ -27,7 +27,7 @@ def map_network_to_intersection(
         Network table (CSV/parquet).  Must contain *network_osm_id_col*,
         *network_length_col*, and *network_link_id_col*.
     intersection_gdf : pd.DataFrame or gpd.GeoDataFrame
-        Output of :func:`osm_chordify.osm.intersect.intersect_edges_with_polygons`.
+        Output of :func:`osm_chordify.osm.intersect.intersect_osm_with_zones`.
         Must contain ``osm_id``, ``proportion``, and *polygon_id_col*.
     polygon_id_col : str
         Name of the polygon-ID column in *intersection_gdf*.

@@ -10,10 +10,23 @@ readme = "README.md"
 requires-python = ">=3.10"
 authors = [{name = "Haitam Laarabi"}]
 license = {file = "LICENSE"}
-dependencies = []
+dependencies = [
+    "geopandas",
+    "networkx",
+    "osmnx",
+    "pandas",
+    "pyproj",
+    "shapely",
+    "tqdm",
+    "pygris",
+    "census",
+    "requests",
+    "osmium",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+diagnostics = ["pyrosm", "matplotlib"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/osm_chordify"]
