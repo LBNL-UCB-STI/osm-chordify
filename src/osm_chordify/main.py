@@ -13,11 +13,8 @@ tabular-network mapping into a single module.
 
 import logging
 import os
-import warnings
 
 import geopandas as gpd
-import matplotlib.pyplot as plt
-import networkx as nx
 import pandas as pd
 
 from osm_chordify.osm.diagnostics import check_invalid_coordinates
@@ -86,35 +83,69 @@ def build_osm_by_pop_density(
 # ---------------------------------------------------------------------------
 
 def map_osm_with_beam_network(
-    network_path, intersection_path, network_osm_id_col="attributeOrigId",
+    osm_path, network_path, network_osm_id_col="attributeOrigId",
     output_path=None,
 ):
-    """
-    Map OSM edges to a BEAM network via a zone-network intersection.
+    """Map OSM edges to a BEAM network on a shared OSM ID.
 
-    Joins the BEAM network table to the intersection result on the shared
-    OSM ID.  All columns from both inputs are included in the output.
+    Joins the BEAM network table to OSM edge geometries.  Accepts
+    ``.gpkg``, ``.geojson``, or ``.pbf`` as the OSM source.  For
+    ``.gpkg`` the ``edges`` layer is read directly; for ``.pbf`` /
+    ``.geojson`` the ``other_tags`` field is parsed to extract
+    ``edge_id`` and ``edge_length``.
 
-    Args:
-        network_path (str): Path to BEAM network CSV/CSV.GZ file.
-        intersection_path (str): Path to zone-network intersection file.
-        network_osm_id_col (str): Column in the BEAM network that holds
-            the OSM ID for joining.  Default ``"attributeOrigId"``.
-        output_path (str, optional): Path to save the output file.
+    All columns from both inputs are included in the output.
 
-    Returns:
-        pd.DataFrame: Merged result with all columns from both inputs.
+    Parameters
+    ----------
+    osm_path : str
+        Path to the OSM network file (``.gpkg``, ``.geojson``, or
+        ``.osm.pbf``).
+    network_path : str
+        Path to the BEAM network CSV / CSV.GZ file.
+    network_osm_id_col : str
+        Column in the BEAM network that holds the OSM ID for joining.
+        Default ``"attributeOrigId"``.
+    output_path : str, optional
+        If provided, save the result to this file (GeoJSON, GPKG, or CSV).
+
+    Returns
+    -------
+    pd.DataFrame
+        Merged result with all columns from both inputs.
     """
     logger.info("Loading network from %s", network_path)
     network_df = pd.read_csv(network_path)
 
-    logger.info("Loading intersection from %s", intersection_path)
-    intersection_gdf = gpd.read_file(intersection_path)
+    logger.info("Loading OSM data from %s", osm_path)
+    if osm_path.endswith(".gpkg"):
+        from osm_chordify.osm.intersect import load_osm_edges
+        osm_gdf = load_osm_edges(osm_path)
+    elif osm_path.lower().endswith(".pbf"):
+        osm_gdf = gpd.read_file(osm_path, layer="lines")
+        osm_gdf = _parse_osm_tags(osm_gdf)
+    else:
+        osm_gdf = gpd.read_file(osm_path)
+        if "other_tags" in osm_gdf.columns:
+            osm_gdf = _parse_osm_tags(osm_gdf)
+
+    osm_id_col = "edge_osm_id" if "edge_osm_id" in osm_gdf.columns else "osm_id"
 
     merged_df = map_network_to_intersection(
         network_df=network_df,
-        intersection_gdf=intersection_gdf,
+        intersection_gdf=osm_gdf,
         network_osm_id_col=network_osm_id_col,
+        intersection_osm_id_col=osm_id_col,
+    )
+
+    # Verification summary
+    n_network_ids = network_df[network_osm_id_col].dropna().nunique()
+    n_osm_ids = osm_gdf[osm_id_col].nunique()
+    n_matched = merged_df[network_osm_id_col].nunique() if len(merged_df) else 0
+    match_rate = n_matched / n_network_ids if n_network_ids else 0
+    logger.info(
+        "Match summary — network IDs: %d, OSM IDs: %d, matched: %d (%.1f%%)",
+        n_network_ids, n_osm_ids, n_matched, match_rate * 100,
     )
 
     if output_path:
@@ -123,12 +154,28 @@ def map_osm_with_beam_network(
     return merged_df
 
 
+def _parse_osm_tags(osm_gdf):
+    """Extract ``edge_id`` and ``edge_length`` from ``other_tags``."""
+    from osm_chordify.osm.tags import parse_other_tags, extract_tag_as_float
+
+    osm_gdf = osm_gdf.copy()
+    osm_gdf["osm_id"] = osm_gdf["osm_id"].astype(int)
+    parsed = osm_gdf["other_tags"].apply(parse_other_tags)
+    osm_gdf["edge_id"] = parsed.apply(lambda t: t.get("edge_id"))
+    osm_gdf["edge_length"] = parsed.apply(
+        lambda t: extract_tag_as_float(t, "length")
+    )
+    return osm_gdf
+
+
 def match_road_network_geometries(
     network_a,
+    network_a_epsg,
     network_b,
-    epsg_utm=None,
+    network_b_epsg,
     matching="flexible",
     output_path=None,
+    output_epsg=None,
 ):
     """Match link geometries between two road networks.
 
@@ -136,25 +183,24 @@ def match_road_network_geometries(
     geometric proximity and overlap.  All attributes from both networks
     are included in the result.
 
-    Each network can be specified as:
-
-    * A file path (``str``) — CRS is read from the file.
-    * A ``(path, epsg)`` tuple — overrides or supplies the CRS explicitly.
-    * A :class:`~geopandas.GeoDataFrame` — used directly.
-
+    Both *network_a* and *network_b* accept either a file path (GPKG,
+    GeoJSON, Shapefile, …) or a :class:`~geopandas.GeoDataFrame`.
     When a ``.gpkg`` path is given, the ``edges`` layer is read
     automatically.
 
     Parameters
     ----------
-    network_a : str, tuple, or gpd.GeoDataFrame
-        First road network.  A tuple of ``(path, epsg)`` can be used to
-        specify the CRS explicitly (e.g. ``("beam_osm.geojson", 4326)``).
-    network_b : str, tuple, or gpd.GeoDataFrame
-        Second road network.  Same format as *network_a*.
-    epsg_utm : int, optional
-        EPSG code for the projected CRS used for distance calculations.
-        Required when the input data is not already in a projected CRS.
+    network_a : str, os.PathLike, or gpd.GeoDataFrame
+        First road network (edges with line geometries).
+    network_a_epsg : int
+        EPSG code for *network_a*'s CRS (e.g. ``4326`` for WGS 84).
+    network_b : str, os.PathLike, or gpd.GeoDataFrame
+        Second road network to match against.
+    network_b_epsg : int
+        EPSG code for *network_b*'s CRS.
+    output_epsg : int, optional
+        EPSG code for the output CRS.  Defaults to *network_a_epsg*
+        if not provided.
     matching : str, optional
         Matching strategy — ``"strict"`` requires high geometric overlap
         between edges, ``"flexible"`` (default) allows partial and
@@ -189,6 +235,10 @@ def diagnose_osm(pbf_path, epsg_utm):
     epsg_utm : int
         EPSG code for the UTM projection used for length calculation.
     """
+    import warnings
+
+    import matplotlib.pyplot as plt
+    import networkx as nx
     from pyrosm import OSM
 
     warnings.filterwarnings('ignore', category=FutureWarning)

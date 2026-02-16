@@ -80,10 +80,12 @@ def _load_zones(zones):
 
 def intersect_road_network_with_zones(
     road_network,
+    road_network_epsg,
     zones,
-    epsg_utm,
+    zones_epsg,
     proportional_cols=None,
     output_path=None,
+    output_epsg=None,
 ):
     """Intersect road-network edges with zone polygons.
 
@@ -104,10 +106,12 @@ def intersect_road_network_with_zones(
     ----------
     road_network : str, os.PathLike, or gpd.GeoDataFrame
         Road-network edges with line geometries.
+    road_network_epsg : int
+        EPSG code for the road network's CRS (e.g. ``26910`` for UTM 10N).
     zones : str, os.PathLike, or gpd.GeoDataFrame
         Zone polygons.
-    epsg_utm : int
-        EPSG code for the UTM projection used for length calculations.
+    zones_epsg : int
+        EPSG code for the zones' CRS.
     proportional_cols : str or list of str, optional
         Edge attribute column(s) to scale by the intersection proportion.
         For each column ``col``, a ``proportional_<col>`` column is added
@@ -115,6 +119,9 @@ def intersect_road_network_with_zones(
         produces ``proportional_edge_length`` and ``proportional_vmt``).
     output_path : str, optional
         If provided, save the result to this file (GeoJSON, GPKG, etc.).
+    output_epsg : int, optional
+        EPSG code for the output CRS.  Defaults to *road_network_epsg*
+        if not provided.
 
     Returns
     -------
@@ -123,10 +130,13 @@ def intersect_road_network_with_zones(
         original edge attributes (prefixed ``edge_``), all original zone
         attributes (prefixed ``zone_``), plus ``edge_length_m``,
         ``proportion``, ``proportional_length_m``, any requested
-        ``proportional_*`` columns, and ``geometry``.  CRS is WGS 84.
+        ``proportional_*`` columns, and ``geometry``.
     """
     edges_gdf = _load_edges(road_network)
     polygons_gdf = _load_zones(zones)
+
+    if output_epsg is None:
+        output_epsg = road_network_epsg
 
     if proportional_cols is None:
         proportional_cols = []
@@ -141,20 +151,20 @@ def intersect_road_network_with_zones(
                 f"{list(edges_gdf.columns)}"
             )
 
-    # Project to UTM
-    logger.info("Projecting geometries to EPSG:%d", epsg_utm)
-    edges_utm = edges_gdf.to_crs(epsg=epsg_utm)
-    polys_utm = polygons_gdf.to_crs(epsg=epsg_utm)
+    # Project both inputs to road_network_epsg for intersection
+    logger.info("Projecting geometries to EPSG:%d", road_network_epsg)
+    edges_proj = edges_gdf.to_crs(epsg=road_network_epsg)
+    polys_proj = polygons_gdf.to_crs(epsg=road_network_epsg)
 
-    sindex = edges_utm.sindex
+    sindex = edges_proj.sindex
     edge_attr_cols = [c for c in edges_gdf.columns if c != "geometry"]
     zone_attr_cols = [c for c in polygons_gdf.columns if c != "geometry"]
 
     results = []
-    logger.info("Intersecting %d zones with %d edges", len(polys_utm), len(edges_utm))
+    logger.info("Intersecting %d zones with %d edges", len(polys_proj), len(edges_proj))
 
     for _, poly_row in tqdm(
-        polys_utm.iterrows(), total=len(polys_utm), desc="Processing zones"
+        polys_proj.iterrows(), total=len(polys_proj), desc="Processing zones"
     ):
         poly_geom = poly_row.geometry
 
@@ -162,7 +172,7 @@ def intersect_road_network_with_zones(
         if not candidates_idx:
             continue
 
-        candidates = edges_utm.iloc[candidates_idx]
+        candidates = edges_proj.iloc[candidates_idx]
         intersecting = candidates[candidates.geometry.intersects(poly_geom)]
         if intersecting.empty:
             continue
@@ -209,12 +219,12 @@ def intersect_road_network_with_zones(
                 "proportional_length_m", "geometry",
             ],
             geometry="geometry",
-            crs=WGS84_EPSG,
+            crs=output_epsg,
         )
 
-    result_gdf = gpd.GeoDataFrame(results, geometry="geometry", crs=epsg_utm)
-    result_gdf = result_gdf.to_crs(epsg=WGS84_EPSG)
-    logger.info("Converted results back to WGS 84")
+    result_gdf = gpd.GeoDataFrame(results, geometry="geometry", crs=road_network_epsg)
+    if output_epsg != road_network_epsg:
+        result_gdf = result_gdf.to_crs(epsg=output_epsg)
 
     if output_path:
         from osm_chordify.utils.io import save_geodataframe

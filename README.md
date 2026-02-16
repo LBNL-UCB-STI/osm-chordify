@@ -71,17 +71,20 @@ Intersect road-network edges with zone polygons. Computes the proportion of each
 # From files — scale edge_length and vmt by proportion
 intersect_road_network_with_zones(
     road_network="sfbay.gpkg",
+    road_network_epsg=26910,
     zones="isrm_polygon.shp",
-    epsg_utm=26910,
+    zones_epsg=26910,
     proportional_cols=["edge_length", "vmt"],
     output_path="intersection.geojson",
+    output_epsg=26910,
 )
 
 # From GeoDataFrames
 result_gdf = intersect_road_network_with_zones(
     road_network=edges_gdf,
+    road_network_epsg=26910,
     zones=polygons_gdf,
-    epsg_utm=26910,
+    zones_epsg=26910,
     proportional_cols="edge_length",
 )
 ```
@@ -92,8 +95,8 @@ Join a BEAM network CSV to a zone-network intersection result on the shared OSM 
 
 ```python
 map_osm_with_beam_network(
+    osm_path="sfbay.gpkg",
     network_path="network.csv.gz",
-    intersection_path="intersection.geojson",
     network_osm_id_col="attributeOrigId",
     output_path="mapping.geojson",
 )
@@ -105,11 +108,13 @@ Spatially match link geometries between two road networks. Accepts file paths or
 
 ```python
 result_gdf = match_road_network_geometries(
-    network_a=("beam_osm.geojson", 4326),
-    network_b=("hpms_network.shp", 26910),
-    epsg_utm=26910,
+    network_a="beam_osm.geojson",
+    network_a_epsg=4326,
+    network_b="hpms_network.shp",
+    network_b_epsg=26910,
     matching="flexible",
     output_path="matched.geojson",
+    output_epsg=26910,
 )
 ```
 

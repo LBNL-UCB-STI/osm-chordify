@@ -21,8 +21,9 @@ intersection_path = f"{out_dir}/polygon-{osm_name}.geojson"
 if not os.path.exists(intersection_path):
     intersect_road_network_with_zones(
         road_network=osm_gpkg,
+        road_network_epsg=utm_epsg,
         zones=zone_polygon_path,
-        epsg_utm=utm_epsg,
+        zones_epsg=utm_epsg,
         output_path=intersection_path,
     )
 
@@ -33,8 +34,8 @@ mapping_output = f"{out_dir}/polygon-network-mapping.geojson"
 
 if not os.path.exists(mapping_output):
     map_osm_with_beam_network(
+        osm_path=osm_gpkg,
         network_path=net_csv,
-        intersection_path=intersection_path,
         network_osm_id_col="attributeOrigId",
         output_path=mapping_output,
     )
