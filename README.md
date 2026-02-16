@@ -1,6 +1,6 @@
 # osm-chordify
 
-Download, filter, and export OSM road networks using population-density-based boundaries. Intersect the resulting geometries with polygon grids (TAZ, census tracts, ISRM cells, etc.) and map them to simulation networks like BEAM.
+Download, filter, and export OSM road networks using population-density-based boundaries. Intersect the resulting geometries with polygon grids (TAZ, census tracts, ISRM cells, etc.) and map them to BEAM/MATSim simulation network.
 
 ## Installation
 
