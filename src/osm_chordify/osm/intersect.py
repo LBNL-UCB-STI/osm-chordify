@@ -82,6 +82,7 @@ def intersect_road_network_with_zones(
     road_network,
     zones,
     epsg_utm,
+    proportional_cols=None,
     output_path=None,
 ):
     """Intersect road-network edges with zone polygons.
@@ -93,7 +94,11 @@ def intersect_road_network_with_zones(
 
     All attributes from both inputs are carried through to the result,
     prefixed with ``edge_`` and ``zone_`` respectively to avoid collisions.
-    Proportions and lengths are computed from the projected geometries.
+
+    The ``proportion`` column indicates what fraction of each edge's
+    geometry falls within the intersecting zone.  Any columns listed in
+    *proportional_cols* are multiplied by this proportion and added as
+    new ``proportional_<col>`` columns.
 
     Parameters
     ----------
@@ -103,6 +108,11 @@ def intersect_road_network_with_zones(
         Zone polygons.
     epsg_utm : int
         EPSG code for the UTM projection used for length calculations.
+    proportional_cols : str or list of str, optional
+        Edge attribute column(s) to scale by the intersection proportion.
+        For each column ``col``, a ``proportional_<col>`` column is added
+        to the result (e.g. ``proportional_cols=["edge_length", "vmt"]``
+        produces ``proportional_edge_length`` and ``proportional_vmt``).
     output_path : str, optional
         If provided, save the result to this file (GeoJSON, GPKG, etc.).
 
@@ -112,11 +122,24 @@ def intersect_road_network_with_zones(
         One row per edge-zone intersection piece.  Columns include all
         original edge attributes (prefixed ``edge_``), all original zone
         attributes (prefixed ``zone_``), plus ``edge_length_m``,
-        ``proportion``, ``proportional_length_m``, and ``geometry``.
-        CRS is WGS 84.
+        ``proportion``, ``proportional_length_m``, any requested
+        ``proportional_*`` columns, and ``geometry``.  CRS is WGS 84.
     """
     edges_gdf = _load_edges(road_network)
     polygons_gdf = _load_zones(zones)
+
+    if proportional_cols is None:
+        proportional_cols = []
+    elif isinstance(proportional_cols, str):
+        proportional_cols = [proportional_cols]
+
+    # Validate that requested columns exist
+    for col in proportional_cols:
+        if col not in edges_gdf.columns:
+            raise ValueError(
+                f"proportional_cols: '{col}' not found in road network columns "
+                f"{list(edges_gdf.columns)}"
+            )
 
     # Project to UTM
     logger.info("Projecting geometries to EPSG:%d", epsg_utm)
@@ -167,6 +190,9 @@ def intersect_road_network_with_zones(
 
             for col in edge_attr_cols:
                 record[f"edge_{col}"] = edge_row[col]
+
+            for col in proportional_cols:
+                record[f"proportional_{col}"] = edge_row[col] * proportion
 
             for col in zone_attr_cols:
                 record[f"zone_{col}"] = poly_row[col]

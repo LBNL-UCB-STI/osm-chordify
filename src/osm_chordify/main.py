@@ -136,17 +136,22 @@ def match_road_network_geometries(
     geometric proximity and overlap.  All attributes from both networks
     are included in the result.
 
-    Both *network_a* and *network_b* accept either a file path (GPKG,
-    GeoJSON, Shapefile, …) or a :class:`~geopandas.GeoDataFrame`.
+    Each network can be specified as:
+
+    * A file path (``str``) — CRS is read from the file.
+    * A ``(path, epsg)`` tuple — overrides or supplies the CRS explicitly.
+    * A :class:`~geopandas.GeoDataFrame` — used directly.
+
     When a ``.gpkg`` path is given, the ``edges`` layer is read
     automatically.
 
     Parameters
     ----------
-    network_a : str, os.PathLike, or gpd.GeoDataFrame
-        First road network (edges with line geometries).
-    network_b : str, os.PathLike, or gpd.GeoDataFrame
-        Second road network to match against.
+    network_a : str, tuple, or gpd.GeoDataFrame
+        First road network.  A tuple of ``(path, epsg)`` can be used to
+        specify the CRS explicitly (e.g. ``("beam_osm.geojson", 4326)``).
+    network_b : str, tuple, or gpd.GeoDataFrame
+        Second road network.  Same format as *network_a*.
     epsg_utm : int, optional
         EPSG code for the projected CRS used for distance calculations.
         Required when the input data is not already in a projected CRS.

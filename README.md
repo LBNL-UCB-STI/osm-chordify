@@ -65,14 +65,15 @@ The `osm_config` dict defines one or more `graph_layers`, each with a `custom_fi
 
 ### `intersect_road_network_with_zones`
 
-Intersect road-network edges with zone polygons. Computes the proportion of each edge within each zone and the corresponding length in meters. All attributes from both inputs are carried through, prefixed with `edge_` and `zone_` to avoid collisions. Both `road_network` and `zones` accept either a file path (GPKG, GeoJSON, Shapefile) or a GeoDataFrame.
+Intersect road-network edges with zone polygons. Computes the proportion of each edge that sits within each zone. All attributes from both inputs are carried through, prefixed with `edge_` and `zone_`. Use `proportional_cols` to specify edge columns that should be scaled by the intersection proportion. Both `road_network` and `zones` accept either a file path (GPKG, GeoJSON, Shapefile) or a GeoDataFrame.
 
 ```python
-# From files
+# From files — scale edge_length and vmt by proportion
 intersect_road_network_with_zones(
     road_network="sfbay.gpkg",
     zones="isrm_polygon.shp",
     epsg_utm=26910,
+    proportional_cols=["edge_length", "vmt"],
     output_path="intersection.geojson",
 )
 
@@ -81,6 +82,7 @@ result_gdf = intersect_road_network_with_zones(
     road_network=edges_gdf,
     zones=polygons_gdf,
     epsg_utm=26910,
+    proportional_cols="edge_length",
 )
 ```
 
@@ -103,8 +105,8 @@ Spatially match link geometries between two road networks. Accepts file paths or
 
 ```python
 result_gdf = match_road_network_geometries(
-    network_a="osm_network.gpkg",
-    network_b="beam_network.geojson",
+    network_a=("beam_osm.geojson", 4326),
+    network_b=("hpms_network.shp", 26910),
     epsg_utm=26910,
     matching="flexible",
     output_path="matched.geojson",
