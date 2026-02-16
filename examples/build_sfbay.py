@@ -77,7 +77,6 @@ osm_config = {
 if __name__ == "__main__":
     build_osm_by_pop_density(
         work_dir=work_dir,
-        area_name=area_config["name"],
         osm_config=osm_config,
         area_config=area_config,
         geo_config=geo_config,

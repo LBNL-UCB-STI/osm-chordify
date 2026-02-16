@@ -23,12 +23,8 @@ import pandas as pd
 from osm_chordify.osm.diagnostics import check_invalid_coordinates
 from osm_chordify.osm.export import export_network
 from osm_chordify.osm.graph import download_and_prepare_osm_network
-from osm_chordify.osm.intersect import (
-    intersect_osm_with_zones,
-    load_osm_edges,
-)
 from osm_chordify.utils.geo import name_osm_network
-from osm_chordify.utils.io import save_dataframe, save_geodataframe
+from osm_chordify.utils.io import save_dataframe
 from osm_chordify.utils.network import map_network_to_intersection
 
 logging.basicConfig(
@@ -43,7 +39,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def build_osm_by_pop_density(
-    work_dir, area_name, osm_config, area_config, geo_config,
+    work_dir, osm_config, area_config, geo_config,
 ):
     """Download, process, validate, and export an OSM network.
 
@@ -51,15 +47,14 @@ def build_osm_by_pop_density(
     ----------
     work_dir : str
         Root working directory.
-    area_name : str
-        Study area name (e.g. ``"sfbay"``).
     osm_config : dict
         OSM configuration (osmnx_settings, graph_layers, etc.).
     area_config : dict
-        Area definition (state_fips, county_fips, census_year, etc.).
+        Area definition (name, state_fips, county_fips, census_year, etc.).
     geo_config : dict
         Geo settings (utm_epsg, etc.).
     """
+    area_name = area_config["name"]
     osm_name = name_osm_network(
         area_name,
         osm_config["graph_layers"],
@@ -87,51 +82,8 @@ def build_osm_by_pop_density(
 
 
 # ---------------------------------------------------------------------------
-# Polygon intersection & network mapping
+# Network mapping
 # ---------------------------------------------------------------------------
-
-def intersect_network_geom_with_zones(
-    grid_path, id_col, osm_geojson_path, osm_gpkg_path, epsg_utm, output_path,
-):
-    """
-    Intersect network edge geometries with zone polygons.
-
-    Args:
-        grid_path (str): Path to polygon grid file.
-        id_col (str): Unique-ID column in the grid (e.g. ``"isrm"``, ``"taz_id"``).
-        osm_geojson_path (str): Path to OSM GeoJSON file.
-        osm_gpkg_path (str): Path to OSM GPKG network file.
-        epsg_utm (int): EPSG code for UTM projection.
-        output_path (str): Path to output file.
-
-    Returns:
-        gpd.GeoDataFrame: Intersection results.
-    """
-    logger.info("Loading polygon grid from %s (id_col=%s)", grid_path, id_col)
-    polygons_gdf = gpd.read_file(grid_path)
-    if id_col not in polygons_gdf.columns:
-        raise ValueError(f"Polygon grid file is missing '{id_col}' column")
-
-    logger.info("Loading OSM edges")
-    edges_gdf = load_osm_edges(osm_geojson_path, osm_gpkg_path)
-
-    result_gdf = intersect_osm_with_zones(
-        polygons_gdf=polygons_gdf,
-        edges_gdf=edges_gdf,
-        polygon_id_col=id_col,
-        epsg_utm=epsg_utm,
-        copy_edge_attrs=True,
-        copy_polygon_attrs=True,
-    )
-
-    if result_gdf.empty:
-        logger.warning("No intersections found")
-        return result_gdf
-
-    save_geodataframe(result_gdf, output_path)
-    logger.info("Polygon-OSM intersection complete")
-    return result_gdf
-
 
 def map_osm_with_beam_network(
     network_path, intersection_path, id_col, osm_id_col, length_col,

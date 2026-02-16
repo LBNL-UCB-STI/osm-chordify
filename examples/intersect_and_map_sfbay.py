@@ -1,31 +1,27 @@
-"""Intersect an OSM network with a polygon grid and map a BEAM network."""
+"""Intersect an OSM network with zone polygons and map a BEAM network."""
 
 import os
 
-from osm_chordify import intersect_network_geom_with_zones, map_osm_with_beam_network
+from osm_chordify import intersect_road_network_with_zones, map_osm_with_beam_network
 
 work_dir = os.path.expanduser("~/Workspace/Simulation/sfbay")
 utm_epsg = 26910
 osm_name = "sfbay-main-residential"
 osm_dir = f"{work_dir}/network/{osm_name}"
 
-# --- Step 1: Intersect OSM edges with polygon grid ---
+# --- Step 1: Intersect OSM edges with zone polygons ---
 
-osm_geojson = f"{osm_dir}/{osm_name}.osm.geojson"
 osm_gpkg = f"{osm_dir}/{osm_name}.gpkg"
-grid_path = f"{work_dir}/inmap/ISRM/isrm_polygon.shp"
-id_col = "isrm"
+zone_polygon_path = f"{work_dir}/inmap/ISRM/isrm_polygon.shp"
 
 out_dir = f"{work_dir}/polygon-{osm_name}"
 os.makedirs(out_dir, exist_ok=True)
 intersection_path = f"{out_dir}/polygon-{osm_name}.geojson"
 
 if not os.path.exists(intersection_path):
-    intersect_network_geom_with_zones(
-        grid_path=grid_path,
-        id_col=id_col,
-        osm_geojson_path=osm_geojson,
-        osm_gpkg_path=osm_gpkg,
+    intersect_road_network_with_zones(
+        road_network=osm_gpkg,
+        zones=zone_polygon_path,
         epsg_utm=utm_epsg,
         output_path=intersection_path,
     )
@@ -39,7 +35,7 @@ if not os.path.exists(mapping_output):
     map_osm_with_beam_network(
         network_path=net_csv,
         intersection_path=intersection_path,
-        id_col="polygon_id",
+        id_col="zone_id",
         osm_id_col="attributeOrigId",
         length_col="linkLength",
         link_id_col="linkId",

@@ -1,40 +1,31 @@
-"""Generic polygon–OSM-edge intersection.
+"""Road-network / zone-polygon intersection.
 
-This module provides two functions:
-
-* :func:`load_osm_edges` — loads an OSM GeoJSON + GPKG pair, parses tags,
-  and returns a single GeoDataFrame with ``osm_id``, ``edge_id``,
-  ``edge_length``, and ``geometry``.
-
-* :func:`intersect_osm_with_zones` — intersects *any* polygon grid
-  (ISRM, TAZ, census tracts, …) with OSM edges and returns proportional
-  lengths per polygon.
+* :func:`load_osm_edges` — loads edges from an OSM GPKG file.
+* :func:`intersect_road_network_with_zones` — intersects road-network edges
+  with zone polygons (TAZ, census tracts, ISRM cells, …) and returns
+  proportional lengths per zone.
 """
 
 import logging
+import os
 
 import geopandas as gpd
 import pandas as pd
 from tqdm import tqdm
-
-from osm_chordify.osm.tags import extract_tag_as_float, parse_other_tags
 
 logger = logging.getLogger(__name__)
 
 WGS84_EPSG = 4326
 
 
-def load_osm_edges(osm_geojson_path, osm_gpkg_path):
-    """Load OSM edges from a GeoJSON + GPKG pair.
+def load_osm_edges(osm_gpkg_path):
+    """Load OSM edges from a GPKG file.
 
-    The GeoJSON file supplies ``osm_id`` and ``other_tags`` (from which
-    ``edge_id`` and ``edge_length`` are extracted).  The GPKG file supplies
-    the ``edge_id`` ↔ geometry mapping.
+    Reads the ``edges`` layer and normalises column names to
+    ``osm_id``, ``edge_id``, ``edge_length``, and ``geometry``.
 
     Parameters
     ----------
-    osm_geojson_path : str
-        Path to the ``*.osm.geojson`` file.
     osm_gpkg_path : str
         Path to the ``*.gpkg`` network file (must contain an ``edges`` layer).
 
@@ -46,94 +37,86 @@ def load_osm_edges(osm_geojson_path, osm_gpkg_path):
     Raises
     ------
     ValueError
-        If required columns are missing from the input files.
+        If required columns are missing from the GPKG file.
     """
-    # Load GPKG edges
-    gpkg_gdf = gpd.read_file(osm_gpkg_path, layer="edges")
-    if "edge_id" not in gpkg_gdf.columns:
-        raise ValueError("OSM GPKG file is missing 'edge_id' column")
+    edges_gdf = gpd.read_file(osm_gpkg_path, layer="edges")
 
-    # Load GeoJSON
-    osm_gdf = gpd.read_file(osm_geojson_path)
-    for col in ("osm_id", "other_tags"):
-        if col not in osm_gdf.columns:
-            raise ValueError(f"OSM GeoJSON file is missing '{col}' column")
+    for col in ("osmid", "edge_id", "length"):
+        if col not in edges_gdf.columns:
+            raise ValueError(f"GPKG edges layer is missing '{col}' column")
 
-    osm_gdf["osm_id"] = osm_gdf["osm_id"].astype(int)
-    osm_gdf["parsed_tags"] = osm_gdf["other_tags"].apply(parse_other_tags)
-    osm_gdf["edge_id"] = osm_gdf["parsed_tags"].apply(
-        lambda x: x.get("edge_id", None)
-    )
-    osm_gdf["edge_length"] = osm_gdf["parsed_tags"].apply(
-        extract_tag_as_float, key="length"
-    )
+    edges_gdf = edges_gdf.rename(columns={"osmid": "osm_id", "length": "edge_length"})
+    edges_gdf["osm_id"] = edges_gdf["osm_id"].astype(int)
 
-    valid = osm_gdf.dropna(subset=["edge_length"])
-    logger.info("Found %d edges with valid length information", len(valid))
-
-    edges_gdf = pd.merge(
-        valid[["osm_id", "edge_id", "edge_length"]],
-        gpkg_gdf[["edge_id", "geometry"]],
-        on="edge_id",
-        how="inner",
-    )
-    edges_gdf = gpd.GeoDataFrame(edges_gdf, geometry="geometry", crs=gpkg_gdf.crs)
-    logger.info("Mapped %d edges to geometries", len(edges_gdf))
+    edges_gdf = edges_gdf[["osm_id", "edge_id", "edge_length", "geometry"]]
+    logger.info("Loaded %d edges from %s", len(edges_gdf), osm_gpkg_path)
     return edges_gdf
 
 
-def intersect_osm_with_zones(
-    polygons_gdf,
-    edges_gdf,
-    polygon_id_col,
-    epsg_utm,
-    copy_edge_attrs=False,
-    copy_polygon_attrs=False,
-):
-    """Intersect polygon geometries with OSM edge geometries.
+def _load_edges(road_network):
+    """Resolve *road_network* to a GeoDataFrame of edges."""
+    if isinstance(road_network, gpd.GeoDataFrame):
+        return road_network
+    if not isinstance(road_network, (str, os.PathLike)):
+        raise TypeError(
+            f"road_network must be a GeoDataFrame or a file path, got {type(road_network).__name__}"
+        )
+    path = str(road_network)
+    if path.endswith(".gpkg"):
+        return load_osm_edges(path)
+    return gpd.read_file(path)
 
-    All geometric operations are performed in the supplied UTM projection;
-    the returned GeoDataFrame is in WGS 84.
+
+def _load_zones(zones):
+    """Resolve *zones* to a GeoDataFrame of polygons."""
+    if isinstance(zones, gpd.GeoDataFrame):
+        return zones
+    if not isinstance(zones, (str, os.PathLike)):
+        raise TypeError(
+            f"zones must be a GeoDataFrame or a file path, got {type(zones).__name__}"
+        )
+    return gpd.read_file(str(zones))
+
+
+def intersect_road_network_with_zones(
+    road_network,
+    zones,
+    epsg_utm,
+    output_path=None,
+):
+    """Intersect road-network edges with zone polygons.
+
+    Both *road_network* and *zones* accept either a file path (GeoJSON,
+    GPKG, Shapefile, …) or a :class:`~geopandas.GeoDataFrame`.  When a
+    ``.gpkg`` path is given for *road_network*, the ``edges`` layer is read
+    and columns are normalised automatically via :func:`load_osm_edges`.
+
+    All attributes from both inputs are carried through to the result,
+    prefixed with ``edge_`` and ``zone_`` respectively to avoid collisions.
+    Proportions and lengths are computed from the projected geometries.
 
     Parameters
     ----------
-    polygons_gdf : gpd.GeoDataFrame
-        Polygon grid.  Must contain *polygon_id_col* and a geometry column.
-    edges_gdf : gpd.GeoDataFrame
-        OSM edges (e.g. from :func:`load_osm_edges`).  Must contain
-        ``osm_id``, ``edge_id``, ``edge_length``, and ``geometry``.
-    polygon_id_col : str
-        Name of the unique-ID column in *polygons_gdf* (e.g. ``"isrm"``,
-        ``"taz_id"``).
+    road_network : str, os.PathLike, or gpd.GeoDataFrame
+        Road-network edges with line geometries.
+    zones : str, os.PathLike, or gpd.GeoDataFrame
+        Zone polygons.
     epsg_utm : int
         EPSG code for the UTM projection used for length calculations.
-    copy_edge_attrs : bool, optional
-        If ``True``, carry over all extra edge attributes (prefixed with
-        ``edge_``).
-    copy_polygon_attrs : bool, optional
-        If ``True``, carry over all extra polygon attributes (prefixed with
-        ``polygon_``).
+    output_path : str, optional
+        If provided, save the result to this file (GeoJSON, GPKG, etc.).
 
     Returns
     -------
     gpd.GeoDataFrame
-        Columns: ``polygon_id``, ``osm_id``, ``edge_id``,
-        ``original_edge_length``, ``proportion``, ``proportional_length``,
-        ``geometry``.  CRS is WGS 84.
-
-    Raises
-    ------
-    ValueError
-        If *polygon_id_col* is not found in *polygons_gdf* or required
-        edge columns are missing.
+        One row per edge-zone intersection piece.  Columns include all
+        original edge attributes (prefixed ``edge_``), all original zone
+        attributes (prefixed ``zone_``), plus ``edge_length_m``,
+        ``proportion``, ``proportional_length_m``, and ``geometry``.
+        CRS is WGS 84.
     """
-    if polygon_id_col not in polygons_gdf.columns:
-        raise ValueError(
-            f"Polygon GeoDataFrame is missing '{polygon_id_col}' column"
-        )
-    for col in ("osm_id", "edge_id", "edge_length"):
-        if col not in edges_gdf.columns:
-            raise ValueError(f"Edges GeoDataFrame is missing '{col}' column")
+    edges_gdf = _load_edges(road_network)
+    polygons_gdf = _load_zones(zones)
 
     # Project to UTM
     logger.info("Projecting geometries to EPSG:%d", epsg_utm)
@@ -141,16 +124,15 @@ def intersect_osm_with_zones(
     polys_utm = polygons_gdf.to_crs(epsg=epsg_utm)
 
     sindex = edges_utm.sindex
-    skip_edge_keys = {"geometry", "osm_id", "edge_length", "edge_id"}
-    skip_poly_keys = {"geometry", polygon_id_col}
+    edge_attr_cols = [c for c in edges_gdf.columns if c != "geometry"]
+    zone_attr_cols = [c for c in polygons_gdf.columns if c != "geometry"]
 
     results = []
-    logger.info("Intersecting %d polygons with %d edges", len(polys_utm), len(edges_utm))
+    logger.info("Intersecting %d zones with %d edges", len(polys_utm), len(edges_utm))
 
     for _, poly_row in tqdm(
-        polys_utm.iterrows(), total=len(polys_utm), desc="Processing polygons"
+        polys_utm.iterrows(), total=len(polys_utm), desc="Processing zones"
     ):
-        poly_id = poly_row[polygon_id_col]
         poly_geom = poly_row.geometry
 
         candidates_idx = list(sindex.intersection(poly_geom.bounds))
@@ -168,33 +150,26 @@ def intersect_osm_with_zones(
             if intersection_geom.is_empty:
                 continue
 
-            geom_length = edge_geom.length
+            edge_length = edge_geom.length
+            intersection_length = intersection_geom.length
             proportion = (
-                round(intersection_geom.length / geom_length, 2)
-                if geom_length > 0
+                round(intersection_length / edge_length, 4)
+                if edge_length > 0
                 else 0
             )
-            original_length = edge_row["edge_length"]
 
             record = {
-                "polygon_id": poly_id,
-                "osm_id": edge_row["osm_id"],
-                "edge_id": edge_row["edge_id"],
-                "original_edge_length": original_length,
+                "edge_length_m": round(edge_length, 2),
                 "proportion": proportion,
-                "proportional_length": original_length * proportion,
+                "proportional_length_m": round(intersection_length, 2),
                 "geometry": intersection_geom,
             }
 
-            if copy_edge_attrs:
-                for k, v in edge_row.items():
-                    if k not in skip_edge_keys and k not in record:
-                        record[f"edge_{k}"] = v
+            for col in edge_attr_cols:
+                record[f"edge_{col}"] = edge_row[col]
 
-            if copy_polygon_attrs:
-                for k, v in poly_row.items():
-                    if k not in skip_poly_keys and k not in record:
-                        record[f"polygon_{k}"] = v
+            for col in zone_attr_cols:
+                record[f"zone_{col}"] = poly_row[col]
 
             results.append(record)
 
@@ -204,9 +179,8 @@ def intersect_osm_with_zones(
         logger.warning("No intersections found — returning empty GeoDataFrame")
         return gpd.GeoDataFrame(
             columns=[
-                "polygon_id", "osm_id", "edge_id",
-                "original_edge_length", "proportion",
-                "proportional_length", "geometry",
+                "edge_length_m", "proportion",
+                "proportional_length_m", "geometry",
             ],
             geometry="geometry",
             crs=WGS84_EPSG,
@@ -215,4 +189,10 @@ def intersect_osm_with_zones(
     result_gdf = gpd.GeoDataFrame(results, geometry="geometry", crs=epsg_utm)
     result_gdf = result_gdf.to_crs(epsg=WGS84_EPSG)
     logger.info("Converted results back to WGS 84")
+
+    if output_path:
+        from osm_chordify.utils.io import save_geodataframe
+        save_geodataframe(result_gdf, output_path)
+        logger.info("Saved intersection to %s", output_path)
+
     return result_gdf

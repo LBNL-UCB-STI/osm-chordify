@@ -41,8 +41,7 @@ Get a free key at https://api.census.gov/data/key_signup.html.
 ```python
 from osm_chordify import (
     build_osm_by_pop_density,
-    intersect_network_geom_with_zones,
-    intersect_osm_with_zones,
+    intersect_road_network_with_zones,
     map_osm_with_beam_network,
     diagnose_osm,
 )
@@ -55,52 +54,44 @@ Download and build a multi-layer OSM network. Each layer can target a different 
 ```python
 build_osm_by_pop_density(
     work_dir="~/Workspace/Simulation/sfbay",
-    area_name="sfbay",
     osm_config=osm_config,   # osmnx settings, graph layers, filters
-    area_config=area_config,  # state/county FIPS, census year
+    area_config=area_config,  # name, state/county FIPS, census year
     geo_config=geo_config,    # UTM EPSG, TAZ shapefile path
 )
 ```
 
 The `osm_config` dict defines one or more `graph_layers`, each with a `custom_filter` (Overpass QL highway filter), `geo_level`, optional `min_density_per_km2`, and `buffer_zone_in_meters`. Layers are downloaded independently and merged into a single network exported as GeoJSON + GPKG.
 
-### `intersect_network_geom_with_zones`
+### `intersect_road_network_with_zones`
 
-Load OSM edges from the exported GeoJSON/GPKG pair and intersect them with a polygon grid. Computes proportional edge lengths per polygon.
+Intersect road-network edges with zone polygons. Computes the proportion of each edge within each zone and the corresponding length in meters. All attributes from both inputs are carried through, prefixed with `edge_` and `zone_` to avoid collisions. Both `road_network` and `zones` accept either a file path (GPKG, GeoJSON, Shapefile) or a GeoDataFrame.
 
 ```python
-intersect_network_geom_with_zones(
-    grid_path="isrm_polygon.shp",
-    id_col="isrm",
-    osm_geojson_path="sfbay.osm.geojson",
-    osm_gpkg_path="sfbay.gpkg",
+# From files
+intersect_road_network_with_zones(
+    road_network="sfbay.gpkg",
+    zones="isrm_polygon.shp",
     epsg_utm=26910,
     output_path="intersection.geojson",
 )
-```
 
-### `intersect_osm_with_zones`
-
-Lower-level function that takes GeoDataFrames directly instead of file paths. Useful when you already have edges and polygons loaded in memory.
-
-```python
-result_gdf = intersect_osm_with_zones(
-    polygons_gdf=polygons,
-    edges_gdf=edges,
-    polygon_id_col="taz_id",
+# From GeoDataFrames
+result_gdf = intersect_road_network_with_zones(
+    road_network=edges_gdf,
+    zones=polygons_gdf,
     epsg_utm=26910,
 )
 ```
 
 ### `map_osm_with_beam_network`
 
-Join a BEAM network CSV to a polygon-OSM intersection result via shared OSM IDs, computing proportional link lengths per polygon.
+Join a BEAM network CSV to a zone-network intersection result via shared OSM IDs, computing proportional link lengths per zone.
 
 ```python
 map_osm_with_beam_network(
     network_path="network.csv.gz",
     intersection_path="intersection.geojson",
-    id_col="polygon_id",
+    id_col="zone_id",
     osm_id_col="attributeOrigId",
     length_col="linkLength",
     link_id_col="linkId",
