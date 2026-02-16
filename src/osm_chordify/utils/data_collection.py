@@ -6,7 +6,7 @@ import geopandas as gpd
 import pandas as pd
 
 
-def collect_census_data(state_fips_code, county_fips_codes, year, census_data_file, geo_level='county'):
+def collect_census_data(state_fips_code, county_fips_codes, year, census_data_file, geo_level='county', census_api_key=None):
     """
     Collect census data at specified geographic level (county, tract, or CBG).
 
@@ -23,6 +23,9 @@ def collect_census_data(state_fips_code, county_fips_codes, year, census_data_fi
     geo_level : str
         Geographic level for data collection: 'county', 'tract', or 'cbg'
         Default is 'county'
+    census_api_key : str, optional
+        Census API key. If not provided, reads from the ``CENSUS_API_KEY``
+        environment variable.
 
     Returns
     -------
@@ -41,17 +44,15 @@ def collect_census_data(state_fips_code, county_fips_codes, year, census_data_fi
         print(f"Loading existing {geo_level} data from {census_data_file}")
         return pd.read_csv(census_data_file, dtype={'GEOID': str})
 
-    # Get Census API key from file
-    api_key_path = os.path.expanduser("~/.census_api_key")
-    try:
-        with open(api_key_path, 'r') as f:
-            census_api_key = f.read().strip()
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Census API key file not found at {api_key_path}. Please create this file with your API key.")
-
+    # Resolve Census API key: parameter > env var
     if not census_api_key:
-        raise ValueError("Census API key is empty. Please check your API key file.")
+        census_api_key = os.environ.get("CENSUS_API_KEY", "").strip()
+    if not census_api_key:
+        raise ValueError(
+            "Census API key not found. Provide it via the census_api_key parameter "
+            "or the CENSUS_API_KEY environment variable. "
+            "Get a free key at https://api.census.gov/data/key_signup.html"
+        )
 
     print(f"Collecting {geo_level.upper()} data for year {year}...")
 
