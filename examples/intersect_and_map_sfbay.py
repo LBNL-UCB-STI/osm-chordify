@@ -35,9 +35,6 @@ if not os.path.exists(mapping_output):
     map_osm_with_beam_network(
         network_path=net_csv,
         intersection_path=intersection_path,
-        id_col="zone_id",
-        osm_id_col="attributeOrigId",
-        length_col="linkLength",
-        link_id_col="linkId",
+        network_osm_id_col="attributeOrigId",
         output_path=mapping_output,
     )

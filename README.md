@@ -43,6 +43,7 @@ from osm_chordify import (
     build_osm_by_pop_density,
     intersect_road_network_with_zones,
     map_osm_with_beam_network,
+    match_road_network_geometries,
     diagnose_osm,
 )
 ```
@@ -85,19 +86,32 @@ result_gdf = intersect_road_network_with_zones(
 
 ### `map_osm_with_beam_network`
 
-Join a BEAM network CSV to a zone-network intersection result via shared OSM IDs, computing proportional link lengths per zone.
+Join a BEAM network CSV to a zone-network intersection result on the shared OSM ID. All columns from both inputs are included in the output.
 
 ```python
 map_osm_with_beam_network(
     network_path="network.csv.gz",
     intersection_path="intersection.geojson",
-    id_col="zone_id",
-    osm_id_col="attributeOrigId",
-    length_col="linkLength",
-    link_id_col="linkId",
+    network_osm_id_col="attributeOrigId",
     output_path="mapping.geojson",
 )
 ```
+
+### `match_road_network_geometries`
+
+Spatially match link geometries between two road networks. Accepts file paths or GeoDataFrames. Use `matching="strict"` for high-overlap matches only, or `matching="flexible"` (default) for partial and nearby matches.
+
+```python
+result_gdf = match_road_network_geometries(
+    network_a="osm_network.gpkg",
+    network_b="beam_network.geojson",
+    epsg_utm=26910,
+    matching="flexible",
+    output_path="matched.geojson",
+)
+```
+
+> **Note:** This function is a placeholder and not yet implemented.
 
 ### `diagnose_osm`
 

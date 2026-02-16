@@ -86,66 +86,84 @@ def build_osm_by_pop_density(
 # ---------------------------------------------------------------------------
 
 def map_osm_with_beam_network(
-    network_path, intersection_path, id_col, osm_id_col, length_col,
-    link_id_col, output_path,
+    network_path, intersection_path, network_osm_id_col="attributeOrigId",
+    output_path=None,
 ):
     """
-    Map OSM edges to a BEAM network via a zone-OSM intersection.
+    Map OSM edges to a BEAM network via a zone-network intersection.
+
+    Joins the BEAM network table to the intersection result on the shared
+    OSM ID.  All columns from both inputs are included in the output.
 
     Args:
-        network_path (str): Path to network CSV/CSV.GZ file.
-        intersection_path (str): Path to polygon-OSM intersection file.
-        id_col (str): Polygon-ID column in the intersection file.
-        osm_id_col (str): OSM ID column in the network file.
-        length_col (str): Link length column in the network file.
-        link_id_col (str): Link ID column in the network file.
-        output_path (str): Path to save the output file.
+        network_path (str): Path to BEAM network CSV/CSV.GZ file.
+        intersection_path (str): Path to zone-network intersection file.
+        network_osm_id_col (str): Column in the BEAM network that holds
+            the OSM ID for joining.  Default ``"attributeOrigId"``.
+        output_path (str, optional): Path to save the output file.
 
     Returns:
-        pd.DataFrame: Merged result.
+        pd.DataFrame: Merged result with all columns from both inputs.
     """
     logger.info("Loading network from %s", network_path)
     network_df = pd.read_csv(network_path)
 
-    logger.info("Loading polygon-OSM intersection from %s", intersection_path)
+    logger.info("Loading intersection from %s", intersection_path)
     intersection_gdf = gpd.read_file(intersection_path)
 
     merged_df = map_network_to_intersection(
         network_df=network_df,
         intersection_gdf=intersection_gdf,
-        polygon_id_col=id_col,
-        network_osm_id_col=osm_id_col,
-        network_length_col=length_col,
-        network_link_id_col=link_id_col,
+        network_osm_id_col=network_osm_id_col,
     )
 
-    save_dataframe(merged_df, output_path)
+    if output_path:
+        save_dataframe(merged_df, output_path)
     logger.info("Network mapping complete")
     return merged_df
 
 
-def match_networks_geoms(
-    source_path, source_id_col, source_length_col,
-    target_path, target_id_col, target_length_col,
-    epsg_utm, output_path,
+def match_road_network_geometries(
+    network_a,
+    network_b,
+    epsg_utm=None,
+    matching="flexible",
+    output_path=None,
 ):
-    """
-    Match link geometries between two networks.
+    """Match link geometries between two road networks.
 
-    Args:
-        source_path (str): Path to source network geo file.
-        source_id_col (str): Link ID column in the source network.
-        source_length_col (str): Link length column in the source network.
-        target_path (str): Path to target network geo file.
-        target_id_col (str): Link ID column in the target network.
-        target_length_col (str): Link length column in the target network.
-        epsg_utm (int): EPSG code for UTM projection.
-        output_path (str): Path to save the output file.
+    Spatially matches edges from *network_a* to *network_b* based on
+    geometric proximity and overlap.  All attributes from both networks
+    are included in the result.
 
-    Returns:
-        gpd.GeoDataFrame: Matching results.
+    Both *network_a* and *network_b* accept either a file path (GPKG,
+    GeoJSON, Shapefile, …) or a :class:`~geopandas.GeoDataFrame`.
+    When a ``.gpkg`` path is given, the ``edges`` layer is read
+    automatically.
+
+    Parameters
+    ----------
+    network_a : str, os.PathLike, or gpd.GeoDataFrame
+        First road network (edges with line geometries).
+    network_b : str, os.PathLike, or gpd.GeoDataFrame
+        Second road network to match against.
+    epsg_utm : int, optional
+        EPSG code for the projected CRS used for distance calculations.
+        Required when the input data is not already in a projected CRS.
+    matching : str, optional
+        Matching strategy — ``"strict"`` requires high geometric overlap
+        between edges, ``"flexible"`` (default) allows partial and
+        nearby matches.
+    output_path : str, optional
+        If provided, save the result to this file.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Matched edge pairs with all attributes from both networks
+        (prefixed ``a_`` and ``b_``) and match-quality metrics.
     """
-    raise NotImplementedError
+    raise NotImplementedError("match_road_network_geometries is not yet implemented")
 
 
 # ---------------------------------------------------------------------------
