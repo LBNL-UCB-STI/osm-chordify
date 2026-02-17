@@ -1,5 +1,6 @@
 """Export a network graph to one or more file formats."""
 
+import logging
 import os
 import pickle
 import subprocess
@@ -10,6 +11,7 @@ from osm_chordify.osm.xml import save_graph_xml
 
 # Absolute path to the package directory (for locating _osm_conf.ini)
 _PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+logger = logging.getLogger(__name__)
 
 DEFAULT_EDGE_TAGS = [
     'highway', 'lanes', 'maxspeed', 'name', 'oneway', 'length',
@@ -76,26 +78,26 @@ def export_network(graph, output_dir, name, edge_tags=None, edge_tag_aggs=None,
     # GraphML
     if "graphml" in formats:
         ox.save_graphml(graph, filepath=paths["graphml"])
-        print(f"GRAPHML Network saved to '{paths['graphml']}'.")
+        logger.info("GRAPHML Network saved to '%s'.", paths["graphml"])
         exported["graphml"] = paths["graphml"]
 
     # Pickle
     if "pkl" in formats:
         with open(paths["pkl"], 'wb') as f:
             pickle.dump(graph, f)
-        print(f"PKL Network saved to '{paths['pkl']}'.")
+        logger.info("PKL Network saved to '%s'.", paths["pkl"])
         exported["pkl"] = paths["pkl"]
 
     # GeoPackage
     if "gpkg" in formats:
-        print("Converting GraphML Network to GPKG Network...")
+        logger.info("Converting GraphML Network to GPKG Network...")
         ox.save_graph_geopackage(graph, filepath=paths["gpkg"])
-        print(f"GPKG Network saved to '{paths['gpkg']}'.")
+        logger.info("GPKG Network saved to '%s'.", paths["gpkg"])
         exported["gpkg"] = paths["gpkg"]
 
     # OSM XML
     if "osm" in formats or "pbf" in formats or "geojson" in formats:
-        print("Creating OSM Network...")
+        logger.info("Creating OSM Network...")
         nodes, edges = ox.graph_to_gdfs(graph)
         g_osm = ox.graph_from_gdfs(nodes, edges, graph_attrs=graph.graph)
         save_graph_xml(
@@ -104,7 +106,7 @@ def export_network(graph, output_dir, name, edge_tags=None, edge_tag_aggs=None,
             edge_tags=edge_tags,
             edge_tag_aggs=edge_tag_aggs,
         )
-        print(f"OSM Network saved to '{paths['osm']}'.")
+        logger.info("OSM Network saved to '%s'.", paths["osm"])
         exported["osm"] = paths["osm"]
 
     # PBF (requires osmium CLI and an OSM file)
@@ -114,7 +116,7 @@ def export_network(graph, output_dir, name, edge_tags=None, edge_tag_aggs=None,
             f"| osmium sort -F pbf - -o {paths['pbf']} --overwrite"
         )
         subprocess.run(cmd, shell=True, check=True)
-        print(f"OSM PBF File saved to '{paths['pbf']}'")
+        logger.info("OSM PBF File saved to '%s'", paths["pbf"])
         exported["pbf"] = paths["pbf"]
 
     # GeoJSON (requires ogr2ogr and a PBF file)
@@ -124,7 +126,7 @@ def export_network(graph, output_dir, name, edge_tags=None, edge_tag_aggs=None,
             f'--config OSM_CONFIG_FILE "{osm_conf_path}"'
         )
         subprocess.run(cmd, shell=True, check=True)
-        print(f"OSM GEOJSON File saved to '{paths['geojson']}'")
+        logger.info("OSM GEOJSON File saved to '%s'", paths["geojson"])
         exported["geojson"] = paths["geojson"]
 
     return exported

@@ -7,7 +7,6 @@ from warnings import warn
 from xml.etree import ElementTree as ET
 import osmnx as ox
 from osmnx import settings
-from osmnx import truncate
 import networkx as nx
 import numpy as np
 import pandas as pd

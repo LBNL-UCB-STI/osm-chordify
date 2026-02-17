@@ -1,11 +1,14 @@
 """Validation & QA helpers."""
 
 import csv
+import logging
 import os
 import subprocess
 
 import osmnx as ox
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def find_long_tags_in_gdf(gdf, element_type="elements"):
@@ -26,7 +29,7 @@ def find_long_tags_in_gdf(gdf, element_type="elements"):
         - long_tags: dict of individual columns with values >= 250 characters
         - long_comb_tags: dict of rows with combined attribute length >= 250 characters
     """
-    print(f"\nAnalyzing {element_type}...")
+    logger.info("Analyzing %s...", element_type)
 
     # Find individual columns with values longer than 250 characters
     long_tags = {}
@@ -38,17 +41,17 @@ def find_long_tags_in_gdf(gdf, element_type="elements"):
 
     # Print results for individual columns
     if long_tags:
-        print(f"\nIndividual {element_type} columns with values >= 250 characters:")
+        logger.info("Individual %s columns with values >= 250 characters:", element_type)
         for column, length in long_tags.items():
-            print(f"Column '{column}': max length = {length} characters")
+            logger.info("Column '%s': max length = %d characters", column, length)
             # Print an example of a long value
             long_value_idx = gdf[column].astype(str).str.len().idxmax()
-            print(f"Example long value: {gdf[column].iloc[long_value_idx]}\n")
+            logger.info("Example long value: %s", gdf[column].iloc[long_value_idx])
     else:
-        print(f"No individual {element_type} columns found with values >= 250 characters")
+        logger.info("No individual %s columns found with values >= 250 characters", element_type)
 
     # Find combinations of attributes that exceed 250 characters
-    print(f"\nChecking {element_type} attribute combinations...")
+    logger.info("Checking %s attribute combinations...", element_type)
     # Get all rows where any combination of attributes might be long
     long_comb_tags = {}
     for idx, row in gdf.iterrows():
@@ -75,17 +78,17 @@ def find_long_tags_in_gdf(gdf, element_type="elements"):
 
     # Print results for combinations
     if long_comb_tags:
-        print(f"\n{element_type.capitalize()} rows with combined attribute length >= 250 characters:")
+        logger.info("%s rows with combined attribute length >= 250 characters:", element_type.capitalize())
         for idx, info in long_comb_tags.items():
-            print(f"\nRow {idx}:")
-            print(f"Total combined length: {info['total_length']} characters")
-            print("Contributing columns:")
+            logger.info("Row %s:", idx)
+            logger.info("Total combined length: %d characters", info['total_length'])
+            logger.info("Contributing columns:")
             for col_info in info['contributing_columns']:
-                print(f"- {col_info['column']}: length={col_info['length']} chars")
+                logger.info("- %s: length=%d chars", col_info['column'], col_info['length'])
                 if col_info['length'] > 50:  # Show value only if it's significantly long
-                    print(f"  Value: {col_info['value'][:50]}...")  # Show first 50 chars
+                    logger.info("  Value: %s...", col_info['value'][:50])  # Show first 50 chars
     else:
-        print(f"No combinations of {element_type} attributes found exceeding 250 characters")
+        logger.info("No combinations of %s attributes found exceeding 250 characters", element_type)
 
     return long_tags, long_comb_tags
 
@@ -131,10 +134,10 @@ def check_duplicate_edge_ids(edges_gdf, id_column='edge_id'):
             examples_df = pd.concat(examples)
             duplicate_info = (duplicate_info, examples_df)
 
-        print(f"Found {len(duplicates)} duplicate edge IDs out of {len(edges_gdf)} total edges")
+        logger.info("Found %d duplicate edge IDs out of %d total edges", len(duplicates), len(edges_gdf))
         return True, duplicate_info
     else:
-        print(f"No duplicate edge IDs found in {len(edges_gdf)} edges")
+        logger.info("No duplicate edge IDs found in %d edges", len(edges_gdf))
         return False, None
 
 
@@ -164,9 +167,9 @@ def check_invalid_coordinates(graph):
     invalid_nodes = nodes[invalid_x | invalid_y]
 
     if len(invalid_nodes) > 0:
-        print(f"\nWARNING: Found {len(invalid_nodes)} nodes with invalid coordinates:")
+        logger.warning("Found %d nodes with invalid coordinates:", len(invalid_nodes))
         for idx, node in invalid_nodes.iterrows():
-            print(f"  Node ID: {idx}, x: {node['x']}, y: {node['y']}")
+            logger.warning("  Node ID: %s, x: %s, y: %s", idx, node['x'], node['y'])
         return True, invalid_nodes.index.tolist()
 
     return False, []
@@ -189,7 +192,7 @@ def scan_network_directories_for_ways(directory):
 
             return ways_count  # Return the number of ways
         except Exception as e:
-            print(f"Error processing {osm_file}: {e}")
+            logger.error("Error processing %s: %s", osm_file, e)
         return 0
 
     output_file = os.path.join(directory, 'ways_count.csv')
@@ -205,19 +208,19 @@ def scan_network_directories_for_ways(directory):
                     if len(row) >= 3:  # Ensure the row has enough columns
                         scanned_files.add(row[2])  # Add scanned file path to the set
         except Exception as e:
-            print(f"Error reading existing CSV: {e}")
+            logger.error("Error reading existing CSV: %s", e)
     else:
         # Create the output file and write the header
         with open(output_file, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['name', 'ways', 'path'])
-            print(f"Created output file: {output_file}")
+            logger.info("Created output file: %s", output_file)
 
-    print(f"Scanning directory: {directory}")  # Log current directory being scanned
+    logger.info("Scanning directory: %s", directory)  # Log current directory being scanned
     for root, dirs, files in os.walk(directory):
         # Skip archive directories
         if 'archive' in root.lower():
-            print(f"Ignoring archive directory: {root}")
+            logger.info("Ignoring archive directory: %s", root)
             continue
 
         # Look for the first osm.pbf file using next() with a generator expression
@@ -225,7 +228,7 @@ def scan_network_directories_for_ways(directory):
 
         if osm_file_path is not None:
             if osm_file_path in scanned_files:
-                print(f"PBF file already processed: {osm_file_path}")  # Log already processed directory
+                logger.info("PBF file already processed: %s", osm_file_path)  # Log already processed directory
                 continue
             else:
                 # Extract network name from the file name or directory name
@@ -233,7 +236,6 @@ def scan_network_directories_for_ways(directory):
                 number_of_ways = calculate_ways(osm_file_path)
 
                 # Ensure file ends with newline before appending
-                """Ensure the file ends with a newline character."""
                 if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
                     with open(output_file, 'rb+') as f:
                         f.seek(-1, os.SEEK_END)  # Go to the last byte
@@ -247,7 +249,7 @@ def scan_network_directories_for_ways(directory):
                     writer = csv.writer(f)
                     writer.writerow([network_name, number_of_ways, osm_file_path])
                     # Write network name, number of ways, and path
-                    print(f"Appended to CSV: {network_name}, {number_of_ways}, {osm_file_path}")
+                    logger.info("Appended to CSV: %s, %s, %s", network_name, number_of_ways, osm_file_path)
         else:
-            print(f"No OSM file found in this directory: {root}.")  # Log message if no file found
+            logger.info("No OSM file found in this directory: %s.", root)  # Log message if no file found
             continue  # Skip to the next directory if no file is found

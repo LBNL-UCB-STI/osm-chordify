@@ -59,16 +59,16 @@ def build_osm_by_pop_density(
     )
     osm_dir = f'{work_dir}/network/{osm_name}'
 
-    print(f'Downloading and preparing OSM-based {osm_name} network...')
+    logger.info("Downloading and preparing OSM-based %s network...", osm_name)
     g_osm = download_and_prepare_osm_network(
         osm_config, area_config, geo_config, work_dir,
     )
 
     has_invalid, invalid_nodes = check_invalid_coordinates(g_osm)
     if has_invalid:
-        print(f"WARNING: Found {len(invalid_nodes)} nodes with invalid coordinates.")
+        logger.warning("Found %d nodes with invalid coordinates.", len(invalid_nodes))
     else:
-        print("All node coordinates are valid.")
+        logger.info("All node coordinates are valid.")
 
     export_network(
         g_osm,
@@ -249,10 +249,10 @@ def diagnose_osm(pbf_path, epsg_utm):
     # Get driving network edges (and nodes implicitly)
     try:
         nodes, edges = osm.get_network(network_type="driving", nodes=True)
-        print(f"Retrieved {len(nodes)} nodes and {len(edges)} edges from OSM")
+        logger.info("Retrieved %d nodes and %d edges from OSM", len(nodes), len(edges))
     except Exception:
         edges = osm.get_network(network_type="driving")
-        print(f"Retrieved {len(edges)} edges from OSM (nodes not separately available)")
+        logger.info("Retrieved %d edges from OSM (nodes not separately available)", len(edges))
 
     # Project to a suitable CRS for length calculation
     edges_projected = edges.to_crs(f'EPSG:{epsg_utm}')
@@ -261,13 +261,13 @@ def diagnose_osm(pbf_path, epsg_utm):
     # -----------------------------------------------------------------
     # Connected components
     # -----------------------------------------------------------------
-    print("\n" + "=" * 80)
-    print("BUILDING CONNECTIVITY GRAPH")
-    print("=" * 80)
+    logger.info("=" * 80)
+    logger.info("BUILDING CONNECTIVITY GRAPH")
+    logger.info("=" * 80)
 
     G = nx.Graph()
 
-    print("Extracting node coordinates from edge geometries...")
+    logger.info("Extracting node coordinates from edge geometries...")
     node_coords_to_id = {}
     next_node_id = 0
 
@@ -293,18 +293,18 @@ def diagnose_osm(pbf_path, epsg_utm):
         edge_count += 1
 
         if edge_count % 10000 == 0:
-            print(f"  Processed {edge_count} edges...")
+            logger.info("  Processed %d edges...", edge_count)
 
-    print(f"Finished processing {edge_count} edges")
-    print(f"Created {len(node_coords_to_id)} unique nodes from edge endpoints")
+    logger.info("Finished processing %d edges", edge_count)
+    logger.info("Created %d unique nodes from edge endpoints", len(node_coords_to_id))
 
     components = list(nx.connected_components(G))
     num_components = len(components)
 
-    print("\n" + "=" * 80)
-    print("CONNECTED COMPONENT ANALYSIS")
-    print("=" * 80)
-    print(f"Number of connected components (undirected): {num_components}")
+    logger.info("=" * 80)
+    logger.info("CONNECTED COMPONENT ANALYSIS")
+    logger.info("=" * 80)
+    logger.info("Number of connected components (undirected): %d", num_components)
 
     components_sorted = sorted(components, key=len, reverse=True)
 
@@ -316,33 +316,34 @@ def diagnose_osm(pbf_path, epsg_utm):
     largest_subgraph = G.subgraph(largest)
     largest_edges = largest_subgraph.number_of_edges()
 
-    print(f"Total nodes: {total_nodes}")
-    print(f"Total edges: {total_edges}")
-    print(f"Largest component nodes: {largest_size} "
-          f"({largest_size / total_nodes * 100:.2f}% of all nodes)")
-    print(f"Largest component edges: {largest_edges} "
-          f"({largest_edges / total_edges * 100:.2f}% of all edges)")
+    logger.info("Total nodes: %d", total_nodes)
+    logger.info("Total edges: %d", total_edges)
+    logger.info("Largest component nodes: %d (%.2f%% of all nodes)",
+                largest_size, largest_size / total_nodes * 100)
+    logger.info("Largest component edges: %d (%.2f%% of all edges)",
+                largest_edges, largest_edges / total_edges * 100)
 
     top_k = min(10, num_components)
     top_sizes = [len(c) for c in components_sorted[:top_k]]
-    print(f"\nSizes of top {top_k} components (in nodes): {top_sizes}")
+    logger.info("Sizes of top %d components (in nodes): %s", top_k, top_sizes)
 
     if num_components > 1:
-        print("\nWARNING: Network is not fully connected.")
-        print(f"  - There are {num_components} disconnected components")
-        print("  - Consider cleaning/removing small components or verifying "
-              "that activity locations lie on the largest component.")
+        logger.warning("Network is not fully connected.")
+        logger.info("  - There are %d disconnected components", num_components)
+        logger.info("  - Consider cleaning/removing small components or verifying "
+                     "that activity locations lie on the largest component.")
 
         small_components = components_sorted[1:]
         num_small = len(small_components)
         total_small_nodes = sum(len(c) for c in small_components)
-        print(f"\nSmall component summary:")
-        print(f"  - {num_small} small components contain {total_small_nodes} nodes total")
-        print(f"  - Smallest component has {top_sizes[-1]} nodes")
+        logger.info("Small component summary:")
+        logger.info("  - %d small components contain %d nodes total",
+                     num_small, total_small_nodes)
+        logger.info("  - Smallest component has %d nodes", top_sizes[-1])
         if num_components <= 20:
-            print(f"  - All component sizes: {top_sizes}")
+            logger.info("  - All component sizes: %s", top_sizes)
     else:
-        print("\nNetwork appears fully connected (single component).")
+        logger.info("Network appears fully connected (single component).")
 
     # -----------------------------------------------------------------
     # Link-length checks
@@ -354,56 +355,56 @@ def diagnose_osm(pbf_path, epsg_utm):
     long_links = edges_projected[edges_projected['length_m'] > 10000].copy()
     long_links = long_links.sort_values('length_m', ascending=False)
 
-    print(f"\n{'=' * 80}")
-    print(f"Found {len(short_links)} links under 15 meters:\n")
+    logger.info("=" * 80)
+    logger.info("Found %d links under 15 meters:", len(short_links))
 
     for idx, row in short_links.iterrows():
         highway = str(row.get('highway', 'N/A'))
         osm_id = str(row.get('id', 'N/A'))
         name = str(row.get('name', 'Unnamed'))
 
-        print(
+        logger.info(
             f"Length: {row['length_m']:.2f}m | "
             f"Highway: {highway:15s} | "
             f"OSM ID: {osm_id:12s} | "
             f"Name: {name}"
         )
 
-    print(f"\n{'=' * 80}")
-    print(f"Found {len(long_links)} links longer than 10 km:\n")
+    logger.info("=" * 80)
+    logger.info("Found %d links longer than 10 km:", len(long_links))
 
     for idx, row in long_links.iterrows():
         highway = str(row.get('highway', 'N/A'))
         osm_id = str(row.get('id', 'N/A'))
         name = str(row.get('name', 'Unnamed'))
 
-        print(
+        logger.info(
             f"Length: {row['length_m'] / 1000:.2f}km | "
             f"Highway: {highway:15s} | "
             f"OSM ID: {osm_id:12s} | "
             f"Name: {name}"
         )
 
-    print(f"\n{'=' * 80}")
-    print(f"Statistics for links under 15 meters:")
+    logger.info("=" * 80)
+    logger.info("Statistics for links under 15 meters:")
     if len(short_links) > 0:
-        print(f"Minimum length: {short_links['length_m'].min():.2f} meters")
-        print(f"Maximum length: {short_links['length_m'].max():.2f} meters")
-        print(f"Average length: {short_links['length_m'].mean():.2f} meters")
-        print(f"Median length: {short_links['length_m'].median():.2f} meters")
+        logger.info("Minimum length: %.2f meters", short_links['length_m'].min())
+        logger.info("Maximum length: %.2f meters", short_links['length_m'].max())
+        logger.info("Average length: %.2f meters", short_links['length_m'].mean())
+        logger.info("Median length: %.2f meters", short_links['length_m'].median())
     else:
-        print("No links shorter than 15 meters.")
+        logger.info("No links shorter than 15 meters.")
 
-    print(f"\nStatistics for entire network (links <= 500m):")
+    logger.info("Statistics for entire network (links <= 500m):")
     edges_no_outliers = edges_projected[edges_projected['length_m'] <= 500].copy()
-    print(f"Total links: {len(edges_no_outliers)}")
+    logger.info("Total links: %d", len(edges_no_outliers))
     if len(edges_no_outliers) > 0:
-        print(f"Minimum length: {edges_no_outliers['length_m'].min():.2f} meters")
-        print(f"Maximum length: {edges_no_outliers['length_m'].max() / 1000:.2f} km")
-        print(f"Average length: {edges_no_outliers['length_m'].mean():.2f} meters")
-        print(f"Median length: {edges_no_outliers['length_m'].median():.2f} meters")
+        logger.info("Minimum length: %.2f meters", edges_no_outliers['length_m'].min())
+        logger.info("Maximum length: %.2f km", edges_no_outliers['length_m'].max() / 1000)
+        logger.info("Average length: %.2f meters", edges_no_outliers['length_m'].mean())
+        logger.info("Median length: %.2f meters", edges_no_outliers['length_m'].median())
     else:
-        print("No links with length <= 500m to report.")
+        logger.info("No links with length <= 500m to report.")
 
     # Histogram
     if len(edges_no_outliers) > 0:
@@ -425,10 +426,10 @@ def diagnose_osm(pbf_path, epsg_utm):
 
         plt.tight_layout()
         plt.savefig('all_links_histogram.png', dpi=300)
-        print(f"\nHistogram saved to 'all_links_histogram.png'")
+        logger.info("Histogram saved to 'all_links_histogram.png'")
         plt.show()
     else:
-        print("\nSkipping histogram: no links after outlier filtering.")
+        logger.info("Skipping histogram: no links after outlier filtering.")
 
 
 # ---------------------------------------------------------------------------

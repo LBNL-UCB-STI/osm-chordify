@@ -1,9 +1,12 @@
 """Census data, geographic boundaries."""
 
+import logging
 import os
 
 import geopandas as gpd
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def collect_census_data(state_fips_code, county_fips_codes, year, census_data_file, geo_level='county', census_api_key=None):
@@ -41,7 +44,7 @@ def collect_census_data(state_fips_code, county_fips_codes, year, census_data_fi
 
     # Check if the output file already exists
     if os.path.exists(census_data_file):
-        print(f"Loading existing {geo_level} data from {census_data_file}")
+        logger.info("Loading existing %s data from %s", geo_level, census_data_file)
         return pd.read_csv(census_data_file, dtype={'GEOID': str})
 
     # Resolve Census API key: parameter > env var
@@ -54,7 +57,7 @@ def collect_census_data(state_fips_code, county_fips_codes, year, census_data_fi
             "Get a free key at https://api.census.gov/data/key_signup.html"
         )
 
-    print(f"Collecting {geo_level.upper()} data for year {year}...")
+    logger.info("Collecting %s data for year %s...", geo_level.upper(), year)
 
     # Initialize the Census API
     from census import Census
@@ -66,7 +69,7 @@ def collect_census_data(state_fips_code, county_fips_codes, year, census_data_fi
     else:
         county_fips_string = county_fips_codes
 
-    print(f"Downloading population data for {geo_level}s...")
+    logger.info("Downloading population data for %ss...", geo_level)
 
     try:
         # Different API calls based on geographic level
@@ -113,12 +116,12 @@ def collect_census_data(state_fips_code, county_fips_codes, year, census_data_fi
         # Save the raw census data
         if census_data_file:
             df.to_csv(census_data_file, index=False)
-            print(f"{geo_level.capitalize()} population data saved to {census_data_file}")
+            logger.info("%s population data saved to %s", geo_level.capitalize(), census_data_file)
 
         return df
 
     except Exception as e:
-        print(f"Error downloading Census data: {e}")
+        logger.error("Error downloading Census data: %s", e)
         raise
 
 
@@ -148,7 +151,7 @@ def collect_tract_boundaries(state_fips_code, county_fips_codes, year):
         # Filter for counties of interest
         geo_data = geo_data[geo_data['COUNTYFP'].isin(county_fips_codes)]
     except Exception as e:
-        print(f"Failed to retrieve geographic boundaries: {e}")
+        logger.error("Failed to retrieve geographic boundaries: %s", e)
         raise
     return geo_data
 
@@ -278,7 +281,7 @@ def download_taz_shapefile(state_fips_code, year, output_dir):
     output_path = os.path.join(output_dir, filename)
 
     # Start the download
-    print(f"Downloading TAZ shapefile for FIPS code {state_fips_code} from {download_url}")
+    logger.info("Downloading TAZ shapefile for FIPS code %s from %s", state_fips_code, download_url)
     try:
         response = requests.get(download_url)
         response.raise_for_status()  # This will check for errors
@@ -287,10 +290,10 @@ def download_taz_shapefile(state_fips_code, year, output_dir):
         with open(output_path, 'wb') as file:
             file.write(response.content)
 
-        print(f"File saved to {output_path}")
+        logger.info("File saved to %s", output_path)
 
     except requests.RequestException as e:
-        print(f"Error downloading the file: {e}")
+        logger.error("Error downloading the file: %s", e)
 
     return output_path
 
@@ -320,13 +323,13 @@ def filter_boundaries_by_density(geo_data, pop_data, utm_epsg, geo_level, min_de
     """
     # Check if filtered boundaries already exist
     if os.path.exists(density_geo_file):
-        print(f"Loading existing {geo_level} boundaries...")
+        logger.info("Loading existing %s boundaries...", geo_level)
         filtered_geo = gpd.read_file(density_geo_file)
-        print(f"Loaded {len(filtered_geo)} {geo_level}s from existing file")
+        logger.info("Loaded %d %ss from existing file", len(filtered_geo), geo_level)
         return filtered_geo
 
     # If not, we need to collect and process the data
-    print(f"Processing {geo_level} boundaries for density analysis...")
+    logger.info("Processing %s boundaries for density analysis...", geo_level)
 
     # Ensure GEOID column has consistent type for merging
     geo_data['GEOID'] = geo_data['GEOID'].astype(str)
@@ -346,56 +349,64 @@ def filter_boundaries_by_density(geo_data, pop_data, utm_epsg, geo_level, min_de
             geo_with_pop['density_per_km2'].rank(pct=True) * 100
     ).round(1)
 
-    # Print density analysis summary
-    print("\nPopulation Density Analysis:")
-    print("==========================")
-
-    # Density summary
-    print(f"\n{geo_level.capitalize()} Density Summary (people/km²):")
-    print("--------------------------------")
+    # Log density analysis summary
     stats = geo_with_pop['density_per_km2'].describe()
-    print(f"Mean density:     {stats['mean']:,.1f}")
-    print(f"Median density:   {stats['50%']:,.1f}")
-    print(f"Standard deviation:  {stats['std']:,.1f}")
-    print(f"Minimum density:  {stats['min']:,.1f}")
-    print(f"Maximum density:  {stats['max']:,.1f}")
-
-    # Density distribution
-    print("\nDensity Distribution Quartiles:")
-    print("----------------------------")
+    logger.info("Population Density Analysis:")
+    logger.info("==========================")
+    logger.info("%s Density Summary (people/km²):", geo_level.capitalize())
+    logger.info("--------------------------------")
+    logger.info("Mean density:     %s", format(stats['mean'], ",.1f"))
+    logger.info("Median density:   %s", format(stats['50%'], ",.1f"))
+    logger.info("Standard deviation:  %s", format(stats['std'], ",.1f"))
+    logger.info("Minimum density:  %s", format(stats['min'], ",.1f"))
+    logger.info("Maximum density:  %s", format(stats['max'], ",.1f"))
+    logger.info("Density Distribution Quartiles:")
+    logger.info("----------------------------")
     for q in [0.25, 0.5, 0.75]:
-        print(f"{int(q * 100)}th percentile: {geo_with_pop['density_per_km2'].quantile(q):,.1f}")
+        logger.info(
+            "%sth percentile: %s",
+            int(q * 100),
+            format(geo_with_pop['density_per_km2'].quantile(q), ",.1f"),
+        )
 
     # Filter by minimum density if specified
     if min_density_per_km2 > 0:
-        print(f"\nFiltering {geo_level}s by minimum density: {min_density_per_km2:,.1f} people/km²")
+        logger.info(
+            "Filtering %ss by minimum density: %s people/km²",
+            geo_level,
+            format(min_density_per_km2, ",.1f"),
+        )
 
         # Apply density filter
         filtered_geo = geo_with_pop[geo_with_pop["density_per_km2"] >= min_density_per_km2]
 
-        # Print selection results
-        print(f"\nSelection Results:")
-        print("----------------")
-        print(f"Selected {len(filtered_geo)} out of {len(geo_with_pop)} {geo_level}s")
-        print(f"Total population in selected {geo_level}s: {filtered_geo['population'].sum():,}")
+        # Log selection results
+        logger.info("Selection Results:")
+        logger.info("----------------")
+        logger.info("Selected %d out of %d %ss", len(filtered_geo), len(geo_with_pop), geo_level)
+        logger.info(
+            "Total population in selected %ss: %s",
+            geo_level,
+            format(filtered_geo['population'].sum(), ","),
+        )
 
         # Calculate percentage of total population
         total_population = geo_with_pop['population'].sum()
         if total_population > 0:
             population_percentage = (filtered_geo['population'].sum() / total_population * 100)
-            print(f"Percentage of total population: {population_percentage:.1f}%\n")
+            logger.info("Percentage of total population: %.1f%%", population_percentage)
         else:
-            print(f"Warning: Total population is zero, cannot calculate percentage\n")
+            logger.warning("Total population is zero, cannot calculate percentage")
     else:
         # If no density filter, use all areas
         filtered_geo = geo_with_pop
-        print(f"\nUsing all {len(filtered_geo)} {geo_level}s (no density filter applied)")
+        logger.info("Using all %d %ss (no density filter applied)", len(filtered_geo), geo_level)
 
     # Ensure output is in WGS84 for consistency
     filtered_geo = filtered_geo.to_crs(epsg=4326)
 
     # Save to file for future use
     filtered_geo.to_file(density_geo_file, driver="GeoJSON")
-    print(f"Saved filtered {geo_level} boundaries to {density_geo_file}")
+    logger.info("Saved filtered %s boundaries to %s", geo_level, density_geo_file)
 
     return filtered_geo

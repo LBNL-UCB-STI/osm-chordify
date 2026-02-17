@@ -1,6 +1,7 @@
 """Graph processing: ferry edges, topology, unique IDs, download pipeline."""
 
 import hashlib
+import logging
 import os
 import pickle
 from statistics import mean
@@ -34,19 +35,21 @@ from osm_chordify.utils.data_collection import (
 )
 from osm_chordify.utils.geo import project_graph, to_convex_hull
 
+logger = logging.getLogger(__name__)
+
 
 def process_ferry_edges(ferry_graph) -> nx.MultiDiGraph:
     """Process ferry edges to make them compatible with car network"""
     if ferry_graph.number_of_edges() == 0:
-        print("No ferry edges found in the graph.")
+        logger.info("No ferry edges found in the graph.")
         return nx.MultiDiGraph()
 
     # Extract nodes and edges
     ferry_nodes, ferry_edges = ox.graph_to_gdfs(ferry_graph)
-    print(f"Total ferry edges: {len(ferry_edges)}")
+    logger.info("Total ferry edges: %d", len(ferry_edges))
 
     # Print available columns to debug
-    print(f"Available columns: {ferry_edges.columns.tolist()}")
+    logger.debug("Available columns: %s", ferry_edges.columns.tolist())
 
     # Create default masks - assume access is allowed unless explicitly denied
     # This is more lenient and works better with OSM data which often lacks explicit tags
@@ -55,21 +58,21 @@ def process_ferry_edges(ferry_graph) -> nx.MultiDiGraph:
     # Check for explicit denials first
     if 'motorcar' in ferry_edges.columns:
         car_mask &= ~(ferry_edges['motorcar'] == 'no')
-        print(f"After motorcar check: {car_mask.sum()} car-accessible edges")
+        logger.info("After motorcar check: %d car-accessible edges", car_mask.sum())
 
     if 'motor_vehicle' in ferry_edges.columns:
         motor_vehicle_denied = ferry_edges['motor_vehicle'] == 'no'
         car_mask &= ~motor_vehicle_denied
-        print(f"After motor_vehicle check: {car_mask.sum()} car-accessible edges")
+        logger.info("After motor_vehicle check: %d car-accessible edges", car_mask.sum())
 
     # Select ferry edges that allow passenger cars
     selected_edges = ferry_edges[car_mask].copy()
 
     if selected_edges.empty:
-        print("No ferry routes found that allow passenger cars")
+        logger.info("No ferry routes found that allow passenger cars")
         return nx.MultiDiGraph()
 
-    print(f"Found {len(selected_edges)} suitable ferry edges")
+    logger.info("Found %d suitable ferry edges", len(selected_edges))
 
     # Set ferry attributes
     selected_edges['reversed'] = False
@@ -94,7 +97,7 @@ def process_ferry_edges(ferry_graph) -> nx.MultiDiGraph:
 
 def process_tags(_g: nx.MultiDiGraph, config: dict) -> nx.MultiDiGraph:
     """Process vehicle classifications based on FHWA weight classes."""
-    print("Processing vehicle classifications...")
+    logger.info("Processing vehicle classifications...")
 
     # Get weight limits and unit from config
     weight_config = config["weight_limits"]
@@ -123,7 +126,7 @@ def process_tags(_g: nx.MultiDiGraph, config: dict) -> nx.MultiDiGraph:
             edges.loc[hgv_mask, "maxweight"] = edges.loc[hgv_mask, "maxweight:hgv"].copy()
 
     if "maxweight" in edges.columns:
-        print("Processing weight restrictions...")
+        logger.info("Processing weight restrictions...")
         # Convert weights to standard unit specified in config
         edges["maxweight"] = edges["maxweight"].apply(lambda x: standardize_weight(x, target_unit))
 
@@ -224,7 +227,7 @@ def validate_graph_topology(G):
     # 1. Remove self-loops
     self_loops = list(nx.selfloop_edges(G))
     if self_loops:
-        print(f"Found {len(self_loops)} self-loop edges - removing")
+        logger.info("Found %d self-loop edges - removing", len(self_loops))
         # Show example with proper MultiDiGraph key handling
         if len(self_loops) > 0:
             # Handle both tuple formats from selfloop_edges
@@ -241,7 +244,7 @@ def validate_graph_topology(G):
             else:
                 edge_data = G[u][v]
 
-            print(f"  Example: Node {u}->{u}, length={edge_data.get('length', 'N/A')}m")
+            logger.debug("  Example: Node %s->%s, length=%sm", u, u, edge_data.get('length', 'N/A'))
 
         # Remove all self-loops
         G.remove_edges_from(self_loops)
@@ -250,7 +253,7 @@ def validate_graph_topology(G):
     # 2. Remove isolated nodes
     isolated = list(nx.isolates(G))
     if isolated:
-        print(f"Found {len(isolated)} isolated nodes - removing")
+        logger.info("Found %d isolated nodes - removing", len(isolated))
         G.remove_nodes_from(isolated)
         isolated_nodes_removed = len(isolated)
 
@@ -260,14 +263,14 @@ def validate_graph_topology(G):
     duplicates = id_counts[id_counts > 1]
 
     if len(duplicates) > 0:
-        print(f"WARNING: Found {len(duplicates)} duplicate edge IDs")
+        logger.warning("Found %d duplicate edge IDs", len(duplicates))
 
     # Summary if changes were made
     if self_loops_removed > 0 or isolated_nodes_removed > 0:
         final_nodes = G.number_of_nodes()
         final_edges = G.number_of_edges()
-        print(f"Network validation: {original_nodes}->{final_nodes} nodes, "
-              f"{original_edges}->{final_edges} edges")
+        logger.info("Network validation: %d->%d nodes, %d->%d edges",
+                    original_nodes, final_nodes, original_edges, final_edges)
 
     return G
 
@@ -309,7 +312,7 @@ def adjust_and_add_graph(graphs, current_graph):
 def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, _geo_config: dict,
                                      work_dir) -> nx.MultiDiGraph:
     """Download and prepare OSM network based on study area configuration."""
-    print(f"=== Preparing OSM Network: {_area_config['name']} ===")
+    logger.info("=== Preparing OSM Network: %s ===", _area_config['name'])
 
     # Apply OSMNX settings
     for setting, value in _network_config["osmnx_settings"].items():
@@ -331,18 +334,18 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
 
     # Try loading from cache
     if os.path.exists(raw_graph_cache_path):
-        print(f"Loading cached graph from: {raw_graph_cache_path}")
+        logger.info("Loading cached graph from: %s", raw_graph_cache_path)
         try:
             with open(raw_graph_cache_path, 'rb') as f:
                 g_combined = pickle.load(f)
-            print(f"  Loaded: {g_combined.number_of_nodes()} nodes, {g_combined.number_of_edges()} edges")
+            logger.info("  Loaded: %d nodes, %d edges", g_combined.number_of_nodes(), g_combined.number_of_edges())
         except Exception as e:
-            print(f"  Cache load failed: {e}. Downloading fresh.")
+            logger.warning("  Cache load failed: %s. Downloading fresh.", e)
             g_combined = None
 
     # Download if cache miss
     if g_combined is None:
-        print("Downloading OSM network layers...")
+        logger.info("Downloading OSM network layers...")
         graphs = []
 
         # Process each configured layer
@@ -352,7 +355,7 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
             custom_filter = layer_config["custom_filter"]
             buffer_in_meters = layer_config["buffer_zone_in_meters"]
 
-            print(f"  Processing layer: {layer_name}")
+            logger.info("  Processing layer: %s", layer_name)
 
             # Collect geographic boundaries
             region_boundary_wgs84 = collect_geographic_boundaries(
@@ -371,7 +374,7 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
 
             elif layer_name == "residential":
                 if min_density > 0:
-                    print(f"    Filtering by density: {min_density} pop/km²")
+                    logger.info("    Filtering by density: %s pop/km²", min_density)
 
                 pop_data = collect_census_data(
                     state_fips_code, county_fips_codes, census_year,
@@ -406,13 +409,13 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
                 truncate_by_edge=truncate_by_edge,
                 custom_filter=custom_filter
             )
-            print(f"    Downloaded: {g.number_of_nodes()} nodes, {g.number_of_edges()} edges")
+            logger.info("    Downloaded: %d nodes, %d edges", g.number_of_nodes(), g.number_of_edges())
 
             # Special processing for ferry layer
             if layer_name == "ferry":
                 g = process_ferry_edges(g)
                 if g.number_of_edges() == 0:
-                    print("    No suitable ferry connections found - skipping layer")
+                    logger.info("    No suitable ferry connections found - skipping layer")
                     continue
 
             # Add to list
@@ -420,19 +423,19 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
 
         # Combine all layers
         g_combined = nx.compose_all(graphs)
-        print(f"Combined layers: {g_combined.number_of_nodes()} nodes, {g_combined.number_of_edges()} edges")
+        logger.info("Combined layers: %d nodes, %d edges", g_combined.number_of_nodes(), g_combined.number_of_edges())
 
         # Save to cache
         try:
             os.makedirs(os.path.dirname(raw_graph_cache_path), exist_ok=True)
             with open(raw_graph_cache_path, 'wb') as f:
                 pickle.dump(g_combined, f)
-            print(f"Cached to: {raw_graph_cache_path}")
+            logger.info("Cached to: %s", raw_graph_cache_path)
         except Exception as e:
-            print(f"Warning: Cache save failed: {e}")
+            logger.warning("Cache save failed: %s", e)
 
     # Process the combined graph
-    print("Processing network...")
+    logger.info("Processing network...")
 
     # Project to UTM
     g_projected = project_graph(g_combined, to_crs=utm_epsg)
@@ -497,7 +500,7 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
     g_validated = validate_graph_topology(g_wgs84)
 
     # Extract largest connected component
-    print("Extracting largest connected component...")
+    logger.info("Extracting largest connected component...")
     if should_strongly_connect:
         largest_component = max(strongly_connected_components(g_validated), key=len)
     else:
@@ -506,11 +509,11 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
     # Report if nodes were removed
     removed_nodes = g_validated.number_of_nodes() - len(largest_component)
     if removed_nodes > 0:
-        print(f"  Removed {removed_nodes} nodes in disconnected components")
+        logger.info("  Removed %d nodes in disconnected components", removed_nodes)
 
     # Create final graph
     g_final = nx.MultiDiGraph(g_validated.subgraph(largest_component).copy())
 
-    print(f"=== Final network: {g_final.number_of_nodes()} nodes, {g_final.number_of_edges()} edges ===")
+    logger.info("=== Final network: %d nodes, %d edges ===", g_final.number_of_nodes(), g_final.number_of_edges())
 
     return g_final

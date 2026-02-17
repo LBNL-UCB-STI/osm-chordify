@@ -1,10 +1,13 @@
 """PBF analysis: OSMTagHandler, stats."""
 
+import logging
 import sys
 from collections import Counter, defaultdict
 
 import osmium
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 class OSMTagHandler(osmium.SimpleHandler):
@@ -60,7 +63,7 @@ class OSMTagHandler(osmium.SimpleHandler):
                         # Update counter for this key-value pair
                         self.other_tags_counters[k][v] += 1
         except Exception as e:
-            print(f"Error parsing other_tags: {e}, value: {other_tags_str[:100]}")
+            logger.error("Error parsing other_tags: %s, value: %s", e, other_tags_str[:100])
 
         return parsed_tags
 
@@ -122,14 +125,14 @@ def analyze_osm_pbf(file_path, num_top_values=10):
     Returns:
         Dictionary of statistics and DataFrame of records
     """
-    print(f"Analyzing OSM PBF file: {file_path}")
+    logger.info("Analyzing OSM PBF file: %s", file_path)
     handler = OSMTagHandler()
 
     # Process the file
     handler.apply_file(file_path)
 
-    print(f"Processed {handler.total_ways} ways, {handler.total_nodes} nodes, and {handler.total_relations} relations")
-    print(f"Found {len(handler.unique_tags)} unique tag keys")
+    logger.info("Processed %d ways, %d nodes, and %d relations", handler.total_ways, handler.total_nodes, handler.total_relations)
+    logger.info("Found %d unique tag keys", len(handler.unique_tags))
 
     # Create summary statistics for ways
     way_stats = {}
@@ -225,39 +228,39 @@ def analyze_osm_pbf(file_path, num_top_values=10):
 
 def print_tag_stats(stats, category_name="Tags", element_type="Elements", limit=None):
     """Print tag statistics in a formatted way"""
-    print(f"\n=== {category_name} Statistics for {element_type} ===")
-    print(f"Total unique {category_name.lower()}: {len(stats)}")
+    logger.info("\n=== %s Statistics for %s ===", category_name, element_type)
+    logger.info("Total unique %s: %d", category_name.lower(), len(stats))
 
     for i, (tag, data) in enumerate(stats.items()):
         if limit and i >= limit:
-            print(f"\n... and {len(stats) - limit} more {category_name.lower()}.")
+            logger.info("\n... and %d more %s.", len(stats) - limit, category_name.lower())
             break
 
-        print(f"\n{i + 1}. {tag}: {data['count']} instances ({data['percent_present']}% of {element_type.lower()})")
-        print(f"   Unique values: {data['unique_values']}")
-        print("   Top values:")
+        logger.info("\n%d. %s: %d instances (%s%% of %s)", i + 1, tag, data['count'], data['percent_present'], element_type.lower())
+        logger.info("   Unique values: %d", data['unique_values'])
+        logger.info("   Top values:")
 
         # Print top values with their counts
         for val, count in data['top_values'].items():
             # Truncate very long values
             display_val = val[:50] + "..." if len(val) > 50 else val
-            print(f"     - {display_val}: {count}")
+            logger.info("     - %s: %d", display_val, count)
 
 
 def main(file_path=None):
     """Main function to analyze an OSM PBF file"""
     if not file_path:
-        print("\nNo file provided. To analyze a file, run: python osm_analyzer.py <file.osm.pbf>")
+        logger.info("No file provided. To analyze a file, run: python osm_analyzer.py <file.osm.pbf>")
         return
 
     # Analyze the PBF file
     stats, records_df = analyze_osm_pbf(file_path, 30)
 
-    print(f"\n=== OSM PBF Analysis Summary ===")
-    print(f"Total ways processed: {stats['total_ways']}")
-    print(f"Total nodes processed: {stats['total_nodes']}")
-    print(f"Total relations processed: {stats['total_relations']}")
-    print(f"Total unique tags found: {len(stats['unique_tags'])}")
+    logger.info("\n=== OSM PBF Analysis Summary ===")
+    logger.info("Total ways processed: %d", stats['total_ways'])
+    logger.info("Total nodes processed: %d", stats['total_nodes'])
+    logger.info("Total relations processed: %d", stats['total_relations'])
+    logger.info("Total unique tags found: %d", len(stats['unique_tags']))
 
     # Print way tag statistics
     print_tag_stats(stats['way_stats'], "Way Tags", "Ways", limit=20)
@@ -273,10 +276,10 @@ def main(file_path=None):
 
     # Show column names in the data
     if not records_df.empty:
-        print("\n=== DataFrame Columns ===")
+        logger.info("\n=== DataFrame Columns ===")
         columns = list(records_df.columns)
         for i, col in enumerate(columns):
-            print(f"{i + 1}. {col}")
+            logger.info("%d. %s", i + 1, col)
 
     return stats, records_df
 

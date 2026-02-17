@@ -15,8 +15,6 @@ from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
-WGS84_EPSG = 4326
-
 
 def load_osm_edges(osm_gpkg_path):
     """Load OSM edges from a GPKG file.

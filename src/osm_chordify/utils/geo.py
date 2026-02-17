@@ -1,10 +1,14 @@
 """Geo/projection utilities."""
 
+import logging
+
 import geopandas as gpd
 import networkx as nx
 import osmnx as ox
 import pyproj
 from osmnx import settings
+
+logger = logging.getLogger(__name__)
 
 
 def name_osm_network(area_name, graph_layers, strongly_connected):
@@ -192,7 +196,7 @@ def project_graph(G: nx.MultiDiGraph, to_crs=None, to_latlong=False) -> nx.Multi
         source_crs = G.graph.get('crs', gdf_nodes.crs)
         if source_crs is not None:
             gdf_edges.crs = source_crs
-            print(f"Setting edge CRS to {source_crs} before projection")
+            logger.debug("Setting edge CRS to %s before projection", source_crs)
 
     # Project the edges
     gdf_edges_proj = ox.projection.project_gdf(gdf_edges, to_crs=to_crs)
@@ -201,17 +205,17 @@ def project_graph(G: nx.MultiDiGraph, to_crs=None, to_latlong=False) -> nx.Multi
     if not gdf_edges_proj.empty and 'geometry' in gdf_edges_proj.columns:
         sample_geom = gdf_edges_proj.iloc[0]['geometry']
         if sample_geom is not None:
-            print(f"Sample edge coordinate after projection: {next(iter(sample_geom.coords))}")
+            logger.debug("Sample edge coordinate after projection: %s", next(iter(sample_geom.coords)))
 
     # STEP 3: REBUILD GRAPH
     # turn projected node/edge gdfs into a graph and update its CRS attribute
     G_proj = ox.convert.graph_from_gdfs(gdf_nodes_proj, gdf_edges_proj, graph_attrs=G.graph)
     G_proj.graph["crs"] = to_crs
 
-    print(f"Projected graph with {len(G)} nodes and {len(G.edges)} edges")
+    logger.info("Projected graph with %d nodes and %d edges", len(G), len(G.edges))
 
     # Final verification
     nodes_check, edges_check = ox.convert.graph_to_gdfs(G_proj)
-    print(f"Verified: Nodes CRS: {nodes_check.crs}, Edges CRS: {edges_check.crs}")
+    logger.debug("Verified: Nodes CRS: %s, Edges CRS: %s", nodes_check.crs, edges_check.crs)
 
     return G_proj
