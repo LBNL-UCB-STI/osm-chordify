@@ -1,23 +1,24 @@
 """Build an OSM network for the Seattle metro area (King, Kitsap, Pierce, Snohomish)."""
 
 import os
-
-import osmnx as ox
+import sys
+from pathlib import Path
 
 from osm_chordify import build_osm_by_pop_density
 
-work_dir = os.path.expanduser("~/Workspace/Simulation/seattle")
+EXAMPLES_DIR = Path(__file__).resolve().parent
+if str(EXAMPLES_DIR) not in sys.path:
+    sys.path.insert(0, str(EXAMPLES_DIR))
 
-osm_highways = [
-    "motorway", "motorway_link", "trunk", "trunk_link",
-    "primary", "primary_link", "secondary", "secondary_link",
-    "tertiary", "tertiary_link", "unclassified",
-]
-osm_residential = ["residential"]
+from common import (
+    base_osm_config,
+    expand_work_dir,
+    highway_filter,
+    parse_build_args,
+    validate_built_network,
+)
 
-
-def _highway_filter(types):
-    return f'["highway"~"{"|".join(types)}"]'
+work_dir = expand_work_dir("seattle")
 
 
 area_config = {
@@ -34,53 +35,43 @@ geo_config = {
     "cbg_id": "GEOID",
 }
 
-osm_config = {
-    "osmnx_settings": {
-        "log_console": True,
-        "use_cache": True,
-        "cache_only_mode": False,
-        "all_oneway": True,
-        "requests_timeout": 180,
-        "overpass_memory": None,
-        "max_query_area_size": 50 * 1000 * 50 * 1000,
-        "overpass_rate_limit": False,
-        "overpass_max_attempts": 3,
-        "useful_tags_way": list(ox.settings.useful_tags_way) + [
-            "maxweight", "hgv", "maxweight:hgv", "maxlength",
-            "motorcar", "motor_vehicle", "goods", "truck",
-        ],
-        "overpass_url": "https://overpass-api.de/api",
+osm_config = base_osm_config(tolerance=2, strongly_connected_components=False)
+osm_config["graph_layers"] = {
+    "main": {
+        "geo_level": "county",
+        "custom_filter": highway_filter(),
+        "buffer_zone_in_meters": 200,
     },
-    "weight_limits": {"unit": "lbs", "mdv_max": 26000, "hdv_max": 80000},
-    "download_enabled": True,
-    "tolerance": 2,
-    "strongly_connected_components": False,
-    "graph_layers": {
-        "main": {
-            "geo_level": "county",
-            "custom_filter": _highway_filter(list(set(osm_highways))),
-            "buffer_zone_in_meters": 200,
-        },
-        "ferry": {
-            "geo_level": "county",
-            "custom_filter": '["route"="ferry"]',
-            "buffer_zone_in_meters": 10000,
-        },
-        "residential": {
-            "min_density_per_km2": 0,
-            "geo_level": "cbg",
-            "custom_filter": _highway_filter(
-                list(set(osm_highways) | set(osm_residential))
-            ),
-            "buffer_zone_in_meters": 20,
-        },
+    "ferry": {
+        "geo_level": "county",
+        "custom_filter": '["route"="ferry"]',
+        "buffer_zone_in_meters": 10000,
+    },
+    "residential": {
+        "min_density_per_km2": 0,
+        "geo_level": "cbg",
+        "custom_filter": highway_filter(include_residential=True),
+        "buffer_zone_in_meters": 20,
     },
 }
 
 if __name__ == "__main__":
-    build_osm_by_pop_density(
-        work_dir=work_dir,
+    args = parse_build_args(work_dir, geo_config["taz_shp"])
+    if args.census_api_key:
+        os.environ["CENSUS_API_KEY"] = args.census_api_key
+
+    geo_config["taz_shp"] = args.taz_shp
+
+    result = build_osm_by_pop_density(
+        work_dir=args.work_dir,
         osm_config=osm_config,
         area_config=area_config,
         geo_config=geo_config,
     )
+
+    if not args.skip_validation:
+        summary = validate_built_network(
+            result["graph"],
+            osm_path=result["exported"].get("osm"),
+        )
+        print(summary)

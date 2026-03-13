@@ -70,12 +70,18 @@ def build_osm_by_pop_density(
     else:
         logger.info("All node coordinates are valid.")
 
-    export_network(
+    exported = export_network(
         g_osm,
         output_dir=osm_dir,
         name=osm_name,
         edge_tag_aggs=[('length', 'sum')],
     )
+    return {
+        "graph": g_osm,
+        "name": osm_name,
+        "output_dir": osm_dir,
+        "exported": exported,
+    }
 
 
 # ---------------------------------------------------------------------------

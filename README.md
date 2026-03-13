@@ -41,6 +41,7 @@ Get a free key at https://api.census.gov/data/key_signup.html.
 ```python
 from osm_chordify import (
     build_osm_by_pop_density,
+    create_osm_highway_filter,
     intersect_road_network_with_zones,
     map_osm_with_beam_network,
     match_road_network_geometries,
@@ -138,6 +139,12 @@ See the [`examples/`](examples/) directory for complete, runnable scripts:
 | [`build_seattle.py`](examples/build_seattle.py) | Build OSM network for Seattle metro (4 counties + ferry) |
 | [`intersect_and_map_sfbay.py`](examples/intersect_and_map_sfbay.py) | Intersect OSM with polygon grid and map BEAM network |
 | [`diagnose_sfbay.py`](examples/diagnose_sfbay.py) | Run diagnostics on a downloaded PBF |
+
+To regression-test the resulting network against duplicate-node coordinate issues that can create R5 self-loops, run:
+
+```bash
+pytest tests/test_graph.py -m "not integration" -k "coordinate or integrity"
+```
 
 ## Project structure
 
