@@ -49,51 +49,30 @@ def extract_tag_as_float(tags_dict, key):
         return None
 
 
-def convert_weight(value: float, from_unit: str, to_unit: str) -> float:
-    """Convert weight between different units."""
-    # Conversion factors
-    conversions = {
-        "lbs_to_kg": 0.453592,
-        "kg_to_lbs": 2.20462,
-        "tons_to_kg": 1000,
-        "kg_to_tons": 0.001
-    }
-
-    if from_unit == to_unit:
-        return value
-
-    conversion_key = f"{from_unit}_to_{to_unit}"
-    if conversion_key in conversions:
-        return value * conversions[conversion_key]
-
-    # Handle two-step conversions if needed
-    if from_unit == "lbs" and to_unit == "tons":
-        return value * conversions["lbs_to_kg"] * conversions["kg_to_tons"]
-    if from_unit == "tons" and to_unit == "lbs":
-        return value * conversions["tons_to_kg"] * conversions["kg_to_lbs"]
-
-    raise ValueError(f"Unsupported conversion from {from_unit} to {to_unit}")
-
 
 def standardize_weight(weight_str: str, target_unit: str) -> float:
     """Convert weight string to numeric value in target unit."""
     if pd.isna(weight_str):
         return None
 
-    # Handle numeric-only strings (assume they're in target unit)
+    # OSM convention: a bare numeric weight (no unit suffix) means metric tons.
+    # Do NOT return it as-is — convert it through the same tons→target pipeline.
     if str(weight_str).replace('.', '').isdigit():
-        return float(weight_str)
+        weight_in_kg = float(weight_str) * 1000.0  # metric tons → kg
+        from_kg = {'lbs': 2.20462, 'kg': 1.0, 'tons': 0.001}
+        return weight_in_kg * from_kg.get(target_unit, 1.0)
 
     # Enhanced pattern to match more formats:
     # - Numbers with optional decimal point
     # - Various unit formats: tons, ton, t, kg, lbs, lb, st (stone)
     match = re.match(r'(\d+\.?\d*)\s*(tons?|t|kg|lbs?|st|stone)', str(weight_str).lower())
     if not match:
-        # Try again with a simpler pattern in case the unit is missing or unusual
+        # Last-resort: extract bare number — again treat as metric tons per OSM convention
         number_match = re.match(r'(\d+\.?\d*)', str(weight_str))
         if number_match:
-            # If we can extract just a number, assume it's in the target unit
-            return float(number_match.group(1))
+            weight_in_kg = float(number_match.group(1)) * 1000.0
+            from_kg = {'lbs': 2.20462, 'kg': 1.0, 'tons': 0.001}
+            return weight_in_kg * from_kg.get(target_unit, 1.0)
         return None
 
     value, unit = match.groups()
@@ -126,7 +105,8 @@ def standardize_weight(weight_str: str, target_unit: str) -> float:
     from_kg = {
         'lbs': 2.20462,
         'kg': 1.0,
-        'tons': 0.001
+        'tons': 0.001,
+        'stone': 1 / 6.35029,  # 1 stone = 6.35029 kg → 1 kg = 0.1575 stone
     }
 
     # If target unit isn't recognized, default to kg
@@ -137,12 +117,11 @@ def standardize_weight(weight_str: str, target_unit: str) -> float:
 
 def standardize_oneway(value):
     """
-    Standardize oneway tag to "yes", "reverse", or "no" strings to match MATSim expectations.
+    Standardize oneway tag to BEAM/MATSim-compatible values:
     - "yes" for forward direction oneway
-    - "reverse" for backward direction oneway
-    - "no" for bidirectional
+    - "-1"  for reverse direction oneway (BEAM expects "-1", not "reverse")
+    - "no"  for bidirectional
     """
-    # Return None if the value is None or empty
     if value is None or value == '':
         return "no"
 
@@ -164,38 +143,32 @@ def standardize_oneway(value):
             if all(part in valid_yes for part in parts):
                 return "yes"
             elif all(part in valid_reverse for part in parts):
-                return "reverse"
+                return "-1"
             else:
                 return "no"
 
-        # Handle single string
         if value in valid_yes:
             return "yes"
         elif value in valid_reverse:
-            return "reverse"
+            return "-1"
         elif value in valid_no:
             return "no"
         else:
-            # If we can't interpret it, MATSim logs a warning and ignores it
             return "no"
 
     # Handle boolean and numeric
     if isinstance(value, (bool, int)):
-        if value in valid_yes:
-            return "yes"
-        else:
-            return "no"
+        return "yes" if value in valid_yes else "no"
 
-    # Handle lists (if that's a use case)
+    # Handle lists
     if isinstance(value, list):
         if all(str(v).lower().strip() in valid_yes for v in value if v):
             return "yes"
         elif all(str(v).lower().strip() in valid_reverse for v in value if v):
-            return "reverse"
+            return "-1"
         else:
             return "no"
 
-    # Default case
     return "no"
 
 
@@ -214,8 +187,8 @@ def standardize_motor_vehicle(value):
         "no" if motor vehicles are restricted (no, false, 0, private)
         "yes" otherwise
     """
-    # Define restrictive values
-    restrictive_values = {"no", "false", "0"}
+    # Define restrictive values — "private" means no general public access
+    restrictive_values = {"no", "false", "0", "private"}
 
     # If value is None or empty, assume motor vehicles are allowed
     if value is None or pd.isna(value) or (isinstance(value, str) and not value.strip()):
@@ -263,9 +236,18 @@ def standardize_maxspeed(value, default_kph=None):
     str or None
         Speed in format "XX mph", or None if the value can't be parsed and no default is provided
     """
+    # List check MUST come before pd.isna: pd.isna(a_list) returns an array,
+    # not a scalar, which raises ValueError in a boolean context.
+    if isinstance(value, list):
+        parsed = [standardize_maxspeed(v, default_kph) for v in value]
+        valid = [int(s.split()[0]) for s in parsed if s and " " in s]
+        if valid:
+            return f"{round(sum(valid) / len(valid))} mph"
+        return f"{round(default_kph / 1.60934)} mph" if default_kph is not None else None
+
     if value is None or pd.isna(value) or (isinstance(value, str) and not value.strip()):
         if default_kph is not None:
-            return f"{round(default_kph / 1.60934)} mph"  # Convert kph to mph
+            return f"{round(default_kph / 1.60934)} mph"
         return None
 
     # Convert to string for processing
@@ -318,8 +300,8 @@ def standardize_access(value):
         "no" if access is restricted (no, private, forestry, permit, etc.)
         "yes" otherwise
     """
-    # Define restrictive values - values that indicate restricted access
-    restrictive_values = {"no", "false", "0"}
+    # Define restrictive values — "private" means no general public access
+    restrictive_values = {"no", "false", "0", "private"}
 
     # If value is None or empty, assume access is allowed
     if value is None or pd.isna(value) or (isinstance(value, str) and not value.strip()):
@@ -356,7 +338,10 @@ def standardize_hgv(value):
     Standardize HGV access values to boolean (True/False)
     Returns True if HGVs are allowed, False if they are not
     """
-    if not value:
+    # Explicit None/empty check — must not use `if not value` here because
+    # boolean False is falsy and would incorrectly be treated as missing,
+    # flipping ferry edges (hgv=False) back to True.
+    if value is None or (isinstance(value, str) and not value.strip()):
         return True  # Default to allowed if no value
 
     # Values that indicate HGV prohibition

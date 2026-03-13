@@ -99,6 +99,18 @@ def export_network(graph, output_dir, name, edge_tags=None, edge_tag_aggs=None,
     if "osm" in formats or "pbf" in formats or "geojson" in formats:
         logger.info("Creating OSM Network...")
         nodes, edges = ox.graph_to_gdfs(graph)
+
+        # Normalize list-valued columns: simplify_graph(track_merged=True) can
+        # produce list-valued osmid columns (e.g. [123, 456]).  OSM XML only
+        # accepts scalar attribute values, so reduce each list to its minimum
+        # member.  min() is deterministic and consistent with the sorted-osmid
+        # hashing used in create_unique_edge_id.
+        for col in edges.columns:
+            if edges[col].apply(lambda x: isinstance(x, list)).any():
+                edges[col] = edges[col].apply(
+                    lambda x: min(x) if isinstance(x, list) else x
+                )
+
         g_osm = ox.graph_from_gdfs(nodes, edges, graph_attrs=graph.graph)
         save_graph_xml(
             g_osm,

@@ -1,6 +1,7 @@
 """Read/write .osm formatted XML files."""
 
 import bz2
+import logging
 import xml.sax
 from pathlib import Path
 from warnings import warn
@@ -10,6 +11,8 @@ from osmnx import settings
 import networkx as nx
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 class _OSMContentHandler(xml.sax.handler.ContentHandler):
     """
@@ -160,7 +163,7 @@ def _save_graph_xml(  # noqa: C901
     oneway = False
     merge_edges = True
     api_version = 0.6
-    precision = 6
+    precision = 7  # OSM standard: 7 d.p. ≈ 1.1 cm resolution
     edge_attrs = ["id", "timestamp", "uid", "user", "version", "changeset"]
     node_tags = ["highway"]
     node_attrs = [
@@ -218,9 +221,9 @@ def _save_graph_xml(  # noqa: C901
     if "oneway" in gdf_edges.columns:
         # fill blank oneway tags with default (False)
         gdf_edges.loc[pd.isna(gdf_edges["oneway"]), "oneway"] = oneway
-        gdf_edges.loc[:, "oneway"] = gdf_edges["oneway"].astype(str)
+        # Use dict-based exact replacement throughout to avoid substring matches
         gdf_edges.loc[:, "oneway"] = (
-            gdf_edges["oneway"].str.replace("False", "no").replace("True", "yes")
+            gdf_edges["oneway"].astype(str).replace({"False": "no", "True": "yes"})
         )
 
     # initialize XML tree with an OSM root element then append nodes/edges
@@ -373,9 +376,17 @@ def _append_nodes_as_edge_attrs(xml_edge, sample_edge, all_edges_df):
         try:
             ordered_nodes = _get_unique_nodes_ordered_from_way(all_edges_df)
         except nx.NetworkXUnfeasible:
-            first_node = all_edges_df.iloc[0]["u"]
-            ordered_nodes = _get_unique_nodes_ordered_from_way(all_edges_df.iloc[1:])
-            ordered_nodes = [first_node] + ordered_nodes
+            try:
+                first_node = all_edges_df.iloc[0]["u"]
+                ordered_nodes = _get_unique_nodes_ordered_from_way(all_edges_df.iloc[1:])
+                ordered_nodes = [first_node] + ordered_nodes
+            except nx.NetworkXUnfeasible:
+                # Fully cyclic way (e.g. roundabout): fall back to u/v only
+                logger.warning(
+                    "Could not determine node order for way (cyclic edges) - "
+                    "writing u/v endpoints only. Way may lose intermediate nodes."
+                )
+                ordered_nodes = [sample_edge["u"], sample_edge["v"]]
         for node in ordered_nodes:
             ET.SubElement(xml_edge, "nd", attrib={"ref": str(node)})
 
@@ -477,6 +488,10 @@ def _get_unique_nodes_ordered_from_way(df_way_edges):
     num_unique_nodes = len(np.unique(all_nodes))
 
     if len(unique_ordered_nodes) < num_unique_nodes:
-        ox.utils.log(f"Recovered order for {len(unique_ordered_nodes)} of {num_unique_nodes} nodes")
+        logger.warning(
+            "Way has disconnected edge components: recovered %d of %d nodes. "
+            "Remaining nodes were dropped from the XML way.",
+            len(unique_ordered_nodes), num_unique_nodes
+        )
 
     return unique_ordered_nodes

@@ -182,7 +182,10 @@ def bool_all(values):
         False if any value is False, True otherwise
     """
     if not values:
-        return None
+        # Vacuous truth: all() of an empty sequence is True in Python.
+        # Returning None here would be inconsistent — an edge with no
+        # source values hasn't been restricted, so default to allowed.
+        return True
 
     # If any value is False, return False
     return all(values)

@@ -108,7 +108,14 @@ def process_tags(_g: nx.MultiDiGraph, config: dict) -> nx.MultiDiGraph:
     # Get graph data while preserving MultiIndex
     nodes, edges = ox.graph_to_gdfs(_g)
 
-    # Standardize tags
+    # Standardize tags.
+    # Type design note:
+    #   oneway / motor_vehicle / access  → string ("yes" / "-1" / "no") — OSM tag
+    #                                       values kept as strings for XML export.
+    #   hgv / mdv                        → bool — used only for internal boolean
+    #                                       logic (masks, bool_all aggregation).
+    #                                       Converted explicitly with astype(bool)
+    #                                       at the end of this function.
     edges['oneway'] = edges['oneway'].apply(standardize_oneway)
     edges['motor_vehicle'] = edges['motor_vehicle'].apply(standardize_motor_vehicle)
     edges['maxspeed'] = edges['maxspeed'].apply(standardize_maxspeed)
@@ -148,16 +155,6 @@ def process_tags(_g: nx.MultiDiGraph, config: dict) -> nx.MultiDiGraph:
         length_restricted_mask = ~edges["maxlength"].isna()
         edges.loc[length_restricted_mask, "hgv"] = False
 
-    if 'oneway' in edges.columns:
-        edges['oneway'] = edges['oneway'].astype(str).str.lower()
-        # Map non-standard values to standard BEAM-compatible values
-        edges['oneway'] = edges['oneway'].replace({
-            'reverse': '-1',
-            'true': 'yes',
-            '-1.0': '-1',
-            '1.0': 'yes'
-        })
-
     # Ensure hgv, mdv and oneway are strictly boolean
     edges["hgv"] = edges["hgv"].astype(bool)
     edges["mdv"] = edges["mdv"].astype(bool)
@@ -183,9 +180,11 @@ def create_unique_edge_id(u, v, osmid, k=None):
     -------
     str : A unique edge identifier
     """
-    # Handle the case where osmid might be a list
+    # Handle the case where osmid might be a list.
+    # Sort before joining so the hash is deterministic regardless of the
+    # order osmnx uses when merging edges during simplify_graph.
     if isinstance(osmid, list):
-        osmid_str = '_'.join(map(str, osmid))
+        osmid_str = '_'.join(map(str, sorted(osmid)))
     else:
         osmid_str = str(osmid)
 
@@ -257,13 +256,71 @@ def validate_graph_topology(G):
         G.remove_nodes_from(isolated)
         isolated_nodes_removed = len(isolated)
 
-    # 3. Check for duplicate edge IDs
+    # Early-exit if the graph is now empty — nothing left to validate.
+    if G.number_of_nodes() == 0:
+        raise ValueError(
+            "validate_graph_topology: graph is empty after cleanup.\n"
+            f"  Original : {original_nodes} nodes, {original_edges} edges\n"
+            f"  Removed  : {self_loops_removed} self-loop edge(s), "
+            f"{isolated_nodes_removed} isolated node(s)\n"
+            f"  Remaining: 0 nodes, 0 edges\n"
+            "This usually means the input graph consisted entirely of self-loops "
+            "or isolated nodes and is not a valid road network."
+        )
+
+    # 3. Check for and resolve duplicate edge IDs.
+    #    Duplicates occur when the same OSM way appears in multiple layers
+    #    (e.g. a primary road covered by both main and residential downloads).
+    #    Joining on a non-unique edge_id silently duplicates rows, so we make
+    #    them unique by appending a counter suffix to all but the first occurrence.
     nodes, edges = ox.graph_to_gdfs(G)
     id_counts = edges['edge_id'].value_counts()
     duplicates = id_counts[id_counts > 1]
 
     if len(duplicates) > 0:
-        logger.warning("Found %d duplicate edge IDs", len(duplicates))
+        logger.warning("Found %d duplicate edge IDs - appending suffix to deduplicate", len(duplicates))
+        seen: dict = {}
+        new_ids = []
+        for eid in edges['edge_id']:
+            count = seen.get(eid, 0)
+            new_ids.append(eid if count == 0 else f"{eid}_{count}")
+            seen[eid] = count + 1
+        edges['edge_id'] = new_ids
+        G = ox.graph_from_gdfs(nodes, edges)
+
+    # 4. Detect node pairs that are suspiciously close in physical space.
+    #    After consolidation, any remaining near-duplicate nodes (different IDs,
+    #    nearly identical coordinates) can still cause R5 to produce self-loops
+    #    if its internal vertex snapping collapses them to the same location.
+    #    This check projects to UTM for metric distances and uses a spatial index
+    #    to avoid O(n²) comparisons.
+    CLOSE_NODE_THRESHOLD_M = 1.0  # warn if two nodes are within this many meters
+    try:
+        from shapely.geometry import Point
+        from shapely.strtree import STRtree
+
+        g_proj = ox.project_graph(G)
+        nodes_proj, _ = ox.graph_to_gdfs(g_proj)
+        node_ids = list(nodes_proj.index)
+        points = [Point(geom.x, geom.y) for geom in nodes_proj.geometry]
+        tree = STRtree(points)
+
+        close_pairs = []
+        for i, pt in enumerate(points):
+            for j in tree.query(pt.buffer(CLOSE_NODE_THRESHOLD_M)):
+                if j > i:
+                    close_pairs.append((node_ids[i], node_ids[j]))
+
+        if close_pairs:
+            logger.warning(
+                "Found %d node pairs within %.1fm of each other - possible residual "
+                "consolidation artifact. Examples: %s",
+                len(close_pairs), CLOSE_NODE_THRESHOLD_M, close_pairs[:5]
+            )
+        else:
+            logger.info("No suspiciously close node pairs found (threshold=%.1fm)", CLOSE_NODE_THRESHOLD_M)
+    except Exception as e:
+        logger.debug("Proximity check skipped: %s", e)
 
     # Summary if changes were made
     if self_loops_removed > 0 or isolated_nodes_removed > 0:
@@ -286,9 +343,11 @@ def adjust_and_add_graph(graphs, current_graph):
         existing_columns.update(existing_edges.columns)
 
     # Add missing columns to current graph's edges
+    # Use None (not "") so pandas .notna() / .isna() checks work correctly
+    # on all downstream code that tests for missing values.
     for col in existing_columns:
         if col not in current_edges.columns:
-            current_edges[col] = ""
+            current_edges[col] = None
 
     # Also ensure existing graphs have columns from current graph
     current_columns = set(current_edges.columns)
@@ -298,7 +357,7 @@ def adjust_and_add_graph(graphs, current_graph):
         columns_added = False
         for col in current_columns:
             if col not in existing_edges.columns:
-                existing_edges[col] = ""
+                existing_edges[col] = None
                 columns_added = True
 
         # Only rebuild the graph if columns were added
@@ -451,6 +510,21 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
         rebuild_graph=True,
         dead_ends=True,
         reconnect_edges=True
+    )
+
+    # Second consolidation pass: reconnect_edges=True in the first pass can place
+    # connector nodes at the exact centroid of the cluster they reconnect to,
+    # producing two nodes at sub-millimeter separation. 1.5m gives a comfortable
+    # margin over the worst-case artifact offset (~0.5m including reprojection
+    # drift) while staying well below the ~2-3m lower bound where real road
+    # features begin. reconnect_edges=False is safe here because the graph is
+    # already fully reconnected from the first pass.
+    g_consolidated = ox.consolidate_intersections(
+        g_consolidated,
+        tolerance=1.5,
+        rebuild_graph=True,
+        dead_ends=False,
+        reconnect_edges=False
     )
 
     # Simplify graph

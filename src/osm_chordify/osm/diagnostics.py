@@ -132,7 +132,7 @@ def check_duplicate_edge_ids(edges_gdf, id_column='edge_id'):
         if examples:
             # Concatenate all example edges into one DataFrame
             examples_df = pd.concat(examples)
-            duplicate_info = (duplicate_info, examples_df)
+            logger.debug("Example duplicate edges:\n%s", examples_df.to_string())
 
         logger.info("Found %d duplicate edge IDs out of %d total edges", len(duplicates), len(edges_gdf))
         return True, duplicate_info

@@ -33,3 +33,6 @@ packages = ["src/osm_chordify"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: requires network access and downloads real OSM data (deselect with '-m not integration')",
+]

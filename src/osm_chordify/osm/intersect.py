@@ -80,7 +80,6 @@ def intersect_road_network_with_zones(
     road_network,
     road_network_epsg,
     zones,
-    zones_epsg,
     proportional_cols=None,
     output_path=None,
     output_epsg=None,
@@ -96,7 +95,7 @@ def intersect_road_network_with_zones(
     prefixed with ``edge_`` and ``zone_`` respectively to avoid collisions.
 
     The ``proportion`` column indicates what fraction of each edge's
-    geometry falls within the intersecting zone.  Any columns listed in
+    geometry falls within the intersecting zone. Any columns listed in
     *proportional_cols* are multiplied by this proportion and added as
     new ``proportional_<col>`` columns.
 
@@ -108,13 +107,14 @@ def intersect_road_network_with_zones(
         EPSG code for the road network's CRS (e.g. ``26910`` for UTM 10N).
     zones : str, os.PathLike, or gpd.GeoDataFrame
         Zone polygons.
-    zones_epsg : int
-        EPSG code for the zones' CRS.
     proportional_cols : str or list of str, optional
         Edge attribute column(s) to scale by the intersection proportion.
         For each column ``col``, a ``proportional_<col>`` column is added
         to the result (e.g. ``proportional_cols=["edge_length", "vmt"]``
         produces ``proportional_edge_length`` and ``proportional_vmt``).
+        Special values are also supported:
+        - ``"edge_length_m"``: include full edge length in meters.
+        - ``"proportional_length_m"``: include intersected segment length in meters.
     output_path : str, optional
         If provided, save the result to this file (GeoJSON, GPKG, etc.).
     output_epsg : int, optional
@@ -126,9 +126,9 @@ def intersect_road_network_with_zones(
     gpd.GeoDataFrame
         One row per edge-zone intersection piece.  Columns include all
         original edge attributes (prefixed ``edge_``), all original zone
-        attributes (prefixed ``zone_``), plus ``edge_length_m``,
-        ``proportion``, ``proportional_length_m``, any requested
-        ``proportional_*`` columns, and ``geometry``.
+        attributes (prefixed ``zone_``), plus ``proportion``,
+        optionally ``edge_length_m`` / ``proportional_length_m`` when
+        requested, any requested ``proportional_*`` columns, and ``geometry``.
     """
     edges_gdf = _load_edges(road_network)
     polygons_gdf = _load_zones(zones)
@@ -140,6 +140,12 @@ def intersect_road_network_with_zones(
         proportional_cols = []
     elif isinstance(proportional_cols, str):
         proportional_cols = [proportional_cols]
+
+    include_edge_length_m = "edge_length_m" in proportional_cols
+    include_proportional_length_m = "proportional_length_m" in proportional_cols
+    proportional_cols = [
+        c for c in proportional_cols if c not in {"edge_length_m", "proportional_length_m"}
+    ]
 
     # Validate that requested columns exist
     for col in proportional_cols:
@@ -190,11 +196,13 @@ def intersect_road_network_with_zones(
             )
 
             record = {
-                "edge_length_m": round(edge_length, 2),
                 "proportion": proportion,
-                "proportional_length_m": round(intersection_length, 2),
                 "geometry": intersection_geom,
             }
+            if include_edge_length_m:
+                record["edge_length_m"] = round(edge_length, 2)
+            if include_proportional_length_m:
+                record["proportional_length_m"] = round(intersection_length, 2)
 
             for col in edge_attr_cols:
                 record[f"edge_{col}"] = edge_row[col]
@@ -211,11 +219,15 @@ def intersect_road_network_with_zones(
 
     if not results:
         logger.warning("No intersections found — returning empty GeoDataFrame")
+        # Column order must match the record dict built in the non-empty path:
+        # proportion, geometry, [edge_length_m], [proportional_length_m], edge_*, proportional_*, zone_*
+        empty_cols = ["proportion", "geometry"]
+        if include_edge_length_m:
+            empty_cols.append("edge_length_m")
+        if include_proportional_length_m:
+            empty_cols.append("proportional_length_m")
         return gpd.GeoDataFrame(
-            columns=[
-                "edge_length_m", "proportion",
-                "proportional_length_m", "geometry",
-            ],
+            columns=empty_cols,
             geometry="geometry",
             crs=output_epsg,
         )
