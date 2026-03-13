@@ -187,7 +187,7 @@ def scan_network_directories_for_ways(directory):
             # Extract the number of ways from the output
             for line in result.stdout.splitlines():
                 if "Number of ways" in line:
-                    ways_count = line.split(":")[1].strip()  # Get the number of ways
+                    ways_count = int(line.split(":")[1].strip())  # Get the number of ways
                     break  # Stop after finding the count
 
             return ways_count  # Return the number of ways

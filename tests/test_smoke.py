@@ -1,4 +1,9 @@
-from osm_chordify import download_osm_network, export_network, intersect_edges_with_polygons, download_and_build_osm
+from osm_chordify import (
+    build_osm_by_pop_density,
+    export_network,
+    intersect_road_network_with_zones,
+)
+from osm_chordify.osm.graph import download_and_prepare_osm_network
 from osm_chordify.osm.intersect import load_osm_edges
 from osm_chordify.utils.geo import name_osm_network, create_osm_highway_filter
 from osm_chordify.utils.network import map_network_to_intersection
@@ -7,16 +12,16 @@ from osm_chordify.utils.io import save_geodataframe, save_dataframe
 
 def test_public_api_imports():
     """Verify the public API is importable and callable."""
-    assert callable(download_osm_network)
+    assert callable(build_osm_by_pop_density)
     assert callable(export_network)
-    assert callable(intersect_edges_with_polygons)
-    assert callable(download_and_build_osm)
+    assert callable(intersect_road_network_with_zones)
+    assert callable(download_and_prepare_osm_network)
 
 
 def test_module_imports():
     """Verify the modules are importable and callable."""
     assert callable(load_osm_edges)
-    assert callable(intersect_edges_with_polygons)
+    assert callable(intersect_road_network_with_zones)
     assert callable(map_network_to_intersection)
     assert callable(save_geodataframe)
     assert callable(save_dataframe)

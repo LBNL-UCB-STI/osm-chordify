@@ -5,9 +5,11 @@ from osm_chordify.main import (
     diagnose_osm,
 )
 from osm_chordify.osm.intersect import intersect_road_network_with_zones
+from osm_chordify.osm.export import export_network
 
 __all__ = [
     "build_osm_by_pop_density",
+    "export_network",
     "intersect_road_network_with_zones",
     "map_osm_with_beam_network",
     "match_road_network_geometries",

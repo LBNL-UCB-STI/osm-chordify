@@ -116,6 +116,26 @@ def process_tags(_g: nx.MultiDiGraph, config: dict) -> nx.MultiDiGraph:
     #                                       logic (masks, bool_all aggregation).
     #                                       Converted explicitly with astype(bool)
     #                                       at the end of this function.
+    # oneway is fundamental to routing direction — osmnx always provides it.
+    # A missing oneway column means the graph was not built correctly.
+    if 'oneway' not in edges.columns:
+        raise ValueError(
+            "process_tags: graph edges are missing the required 'oneway' column. "
+            "Ensure the graph was downloaded with the standard osmnx tag set."
+        )
+
+    # motor_vehicle, maxspeed, and access are optional OSM tags — many edges
+    # legitimately lack them.  Fill with None so standardize_* functions return
+    # their safe defaults ("yes", None, "yes" respectively).
+    for _opt_col in ('motor_vehicle', 'maxspeed', 'access'):
+        if _opt_col not in edges.columns:
+            logger.warning(
+                "process_tags: optional column '%s' not found in graph edges — "
+                "defaulting all edges to None for this tag.",
+                _opt_col,
+            )
+            edges[_opt_col] = None
+
     edges['oneway'] = edges['oneway'].apply(standardize_oneway)
     edges['motor_vehicle'] = edges['motor_vehicle'].apply(standardize_motor_vehicle)
     edges['maxspeed'] = edges['maxspeed'].apply(standardize_maxspeed)
@@ -557,14 +577,14 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
         }
     )
 
-    # Create unique edge IDs
+    # Create unique edge IDs.
+    # After graph_to_gdfs, u/v/key are the MultiIndex — NOT regular columns.
+    # row.name gives (u, v, key); row['u_original'] would KeyError.
     nodes, edges = ox.graph_to_gdfs(g_simplified)
-    edges['edge_id'] = edges.apply(
-        lambda row: create_unique_edge_id(
-            row['u_original'], row['v_original'], row['osmid'], row.get('key', None)
-        ),
-        axis=1
-    )
+    edges['edge_id'] = [
+        create_unique_edge_id(u, v, row['osmid'], k)
+        for (u, v, k), row in edges.iterrows()
+    ]
     g_hashed = ox.graph_from_gdfs(nodes, edges)
 
     # Project back to WGS84
