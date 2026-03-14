@@ -2,7 +2,16 @@
 
 import importlib.util
 import os
+import sys
 from pathlib import Path
+
+EXAMPLES_DIR = Path(__file__).resolve().parent
+if str(EXAMPLES_DIR) not in sys.path:
+    sys.path.insert(0, str(EXAMPLES_DIR))
+
+from _bootstrap import bootstrap_example_paths
+
+bootstrap_example_paths(__file__)
 
 from osm_chordify import intersect_road_network_with_zones, map_osm_with_beam_network
 from osm_chordify.utils.geo import name_osm_network

@@ -3,7 +3,17 @@
 import argparse
 import json
 import os
+import sys
 import xml.etree.ElementTree as ET
+from pathlib import Path
+
+EXAMPLES_DIR = Path(__file__).resolve().parent
+if str(EXAMPLES_DIR) not in sys.path:
+    sys.path.insert(0, str(EXAMPLES_DIR))
+
+from _bootstrap import bootstrap_example_paths
+
+bootstrap_example_paths(__file__)
 
 import osmnx as ox
 

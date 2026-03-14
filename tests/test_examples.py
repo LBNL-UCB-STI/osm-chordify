@@ -38,21 +38,6 @@ def test_build_examples_define_string_custom_filters():
                 )
 
 
-def test_diagnose_sfbay_tracks_build_sfbay_network_name():
-    build_sfbay = _load_module("build_sfbay", "examples/build_sfbay.py")
-    diagnose_sfbay = _load_module("diagnose_sfbay", "examples/diagnose_sfbay.py")
-
-    expected_name = name_osm_network(
-        build_sfbay.area_config["name"],
-        build_sfbay.osm_config["graph_layers"],
-        build_sfbay.osm_config["strongly_connected_components"],
-    )
-
-    assert diagnose_sfbay.osm_name == expected_name
-    assert diagnose_sfbay.utm_epsg == build_sfbay.geo_config["utm_epsg"]
-    assert diagnose_sfbay.pbf_path.endswith(f"{expected_name}.osm.pbf")
-
-
 def test_examples_use_public_package_imports():
     for relative_path in (
         "examples/build_sfbay.py",
@@ -71,12 +56,39 @@ def test_examples_use_public_package_imports():
             assert "create_osm_highway_filter" in public_imports
 
 
-def test_diagnose_sfbay_runs_as_a_script_without_executing_diagnostics():
+def test_diagnose_osm_pbf_exposes_help():
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "examples/diagnose_osm_pbf.py"), "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        "diagnose_osm_pbf.py --help failed.\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "--epsg-utm" in result.stdout
+    assert "--graph-path" in result.stdout
+    assert "--osm-xml" in result.stdout
+
+
+def test_diagnose_osm_pbf_runs_as_a_script_without_executing_diagnostics(tmp_path):
     env = os.environ.copy()
     env["OSM_CHORDIFY_SKIP_DIAGNOSE"] = "1"
+    pbf_path = tmp_path / "sample.osm.pbf"
+    pbf_path.write_bytes(b"placeholder")
 
     result = subprocess.run(
-        [sys.executable, str(ROOT / "examples/diagnose_sfbay.py")],
+        [
+            sys.executable,
+            str(ROOT / "examples/diagnose_osm_pbf.py"),
+            str(pbf_path),
+            "--epsg-utm",
+            "26910",
+        ],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -85,7 +97,7 @@ def test_diagnose_sfbay_runs_as_a_script_without_executing_diagnostics():
     )
 
     assert result.returncode == 0, (
-        "diagnose_sfbay.py failed to import/run as a script.\n"
+        "diagnose_osm_pbf.py failed to import/run as a script.\n"
         f"stdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
     )

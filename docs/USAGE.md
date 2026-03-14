@@ -64,6 +64,20 @@ This runs:
 - a generic real-download smoke workflow test
 - a Seattle example validation test
 
+## PBF diagnostics
+
+To validate and diagnose a built `.osm.pbf` artifact:
+
+```bash
+./.venv/bin/python examples/diagnose_osm_pbf.py \
+./output/network/seattle-cbg0-ferry-weakConn-network/seattle-cbg0-ferry-weakConn-network.osm.pbf \
+  --epsg-utm 32048
+```
+
+If a sibling `.pkl`, `.graphml`, or `.osm` file exists next to the PBF, the script will also print the same build-validation metrics used by the example build validator before running the PBF-specific diagnostics.
+
+The PBF diagnostics step uses the optional `pyrosm` dependency. Histogram output also uses `matplotlib` when available; if `matplotlib` is missing, diagnostics still run and only the histogram is skipped.
+
 ## Project structure
 
 ```text

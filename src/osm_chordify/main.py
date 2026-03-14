@@ -246,11 +246,30 @@ def diagnose_osm(pbf_path, epsg_utm):
     """
     import warnings
 
-    import matplotlib.pyplot as plt
     import networkx as nx
-    from pyrosm import OSM
+    import pandas as pd
+
+    try:
+        from pyrosm import OSM
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "PBF diagnostics require the optional 'pyrosm' dependency. "
+            "Install it with `pip install \"osm-chordify[diagnostics]\"` "
+            "or `pip install pyrosm`."
+        ) from exc
+
+    try:
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError:
+        plt = None
 
     warnings.filterwarnings('ignore', category=FutureWarning)
+    chained_assignment_error = getattr(pd.errors, "ChainedAssignmentError", None)
+    if chained_assignment_error is not None:
+        warnings.filterwarnings('ignore', category=chained_assignment_error)
+    setting_with_copy_warning = getattr(pd.errors, "SettingWithCopyWarning", None)
+    if setting_with_copy_warning is not None:
+        warnings.filterwarnings('ignore', category=setting_with_copy_warning)
 
     pbf_path = os.path.expanduser(pbf_path)
     osm = OSM(pbf_path)
@@ -300,9 +319,6 @@ def diagnose_osm(pbf_path, epsg_utm):
 
         G.add_edge(start_id, end_id)
         edge_count += 1
-
-        if edge_count % 10000 == 0:
-            logger.info("  Processed %d edges...", edge_count)
 
     logger.info("Finished processing %d edges", edge_count)
     logger.info("Created %d unique nodes from edge endpoints", len(node_coords_to_id))
@@ -367,32 +383,8 @@ def diagnose_osm(pbf_path, epsg_utm):
     logger.info("=" * 80)
     logger.info("Found %d links under 15 meters:", len(short_links))
 
-    for idx, row in short_links.iterrows():
-        highway = str(row.get('highway', 'N/A'))
-        osm_id = str(row.get('id', 'N/A'))
-        name = str(row.get('name', 'Unnamed'))
-
-        logger.info(
-            f"Length: {row['length_m']:.2f}m | "
-            f"Highway: {highway:15s} | "
-            f"OSM ID: {osm_id:12s} | "
-            f"Name: {name}"
-        )
-
     logger.info("=" * 80)
     logger.info("Found %d links longer than 10 km:", len(long_links))
-
-    for idx, row in long_links.iterrows():
-        highway = str(row.get('highway', 'N/A'))
-        osm_id = str(row.get('id', 'N/A'))
-        name = str(row.get('name', 'Unnamed'))
-
-        logger.info(
-            f"Length: {row['length_m'] / 1000:.2f}km | "
-            f"Highway: {highway:15s} | "
-            f"OSM ID: {osm_id:12s} | "
-            f"Name: {name}"
-        )
 
     logger.info("=" * 80)
     logger.info("Statistics for links under 15 meters:")
@@ -416,7 +408,11 @@ def diagnose_osm(pbf_path, epsg_utm):
         logger.info("No links with length <= 500m to report.")
 
     # Histogram
-    if len(edges_no_outliers) > 0:
+    if plt is None:
+        logger.warning(
+            "matplotlib is not installed; skipping link-length histogram generation."
+        )
+    elif len(edges_no_outliers) > 0:
         plt.figure(figsize=(12, 6))
         plt.hist(edges_no_outliers['length_m'], bins=50, edgecolor='black', alpha=0.7)
         plt.xlabel('Length (meters)')

@@ -7,6 +7,10 @@ EXAMPLES_DIR = Path(__file__).resolve().parent
 if str(EXAMPLES_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_DIR))
 
+from _bootstrap import bootstrap_example_paths
+
+bootstrap_example_paths(__file__)
+
 from common import (
     base_osm_config,
     highway_filter,
@@ -40,7 +44,7 @@ osm_config["graph_layers"] = {
         "buffer_zone_in_meters": 10000,
     },
     "residential": {
-        "min_density_per_km2": 0,
+        "min_density_per_km2": 120,
         "geo_level": "cbg",
         "custom_filter": highway_filter(include_residential=True),
         "buffer_zone_in_meters": 20,

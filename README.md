@@ -70,6 +70,6 @@ See the [`examples/`](examples/) directory for complete, runnable scripts:
 | [`build_sfbay.py`](examples/build_sfbay.py) | Build OSM network for the SF Bay Area (9 counties) |
 | [`build_seattle.py`](examples/build_seattle.py) | Build OSM network for Seattle metro (4 counties + ferry) |
 | [`intersect_and_map_sfbay.py`](examples/intersect_and_map_sfbay.py) | Intersect OSM with polygon grid and map BEAM network |
-| [`diagnose_sfbay.py`](examples/diagnose_sfbay.py) | Run diagnostics on a downloaded PBF |
+| [`diagnose_osm_pbf.py`](examples/diagnose_osm_pbf.py) | Validate and diagnose a built `.osm.pbf` artifact |
 
 For commands, output layout, validation behavior, and project structure, see [docs/USAGE.md](docs/USAGE.md).
