@@ -1,4 +1,4 @@
-"""Graph processing: ferry edges, topology, unique IDs, download pipeline."""
+"""Graph processing: ferry edges, topology, validation, and download pipeline."""
 
 import hashlib
 import logging
@@ -36,6 +36,43 @@ from osm_chordify.utils.data_collection import (
 from osm_chordify.utils.geo import project_graph, to_convex_hull
 
 logger = logging.getLogger(__name__)
+
+
+def _get_overpass_urls(network_config: dict) -> list[str]:
+    """Return the ordered list of Overpass endpoints to try."""
+    urls = network_config["osmnx_settings"].get("overpass_urls")
+    if urls:
+        return list(dict.fromkeys(urls))
+
+    url = network_config["osmnx_settings"].get("overpass_url")
+    return [url] if url else []
+
+
+def _download_with_overpass_fallback(download_fn, network_config: dict, context: str):
+    """Try multiple Overpass endpoints until one succeeds."""
+    overpass_urls = _get_overpass_urls(network_config)
+    if not overpass_urls:
+        return download_fn()
+
+    errors = []
+    for overpass_url in overpass_urls:
+        ox.settings.overpass_url = overpass_url
+        try:
+            logger.info("Downloading %s via Overpass endpoint %s", context, overpass_url)
+            return download_fn()
+        except Exception as exc:  # pragma: no cover - exercised via monkeypatch in tests
+            logger.warning(
+                "Overpass download failed for %s via %s: %s",
+                context,
+                overpass_url,
+                exc,
+            )
+            errors.append(f"{overpass_url}: {exc}")
+
+    raise RuntimeError(
+        f"All Overpass endpoints failed for {context}. "
+        f"Tried: {overpass_urls}. Errors: {' | '.join(errors)}"
+    )
 
 
 def process_ferry_edges(ferry_graph) -> nx.MultiDiGraph:
@@ -352,6 +389,132 @@ def validate_graph_topology(G):
     return G
 
 
+def summarize_edge_quality(G):
+    """Summarize edge-level quality checks and anomaly counts."""
+    _, edges = ox.graph_to_gdfs(G)
+
+    valid_oneway_values = {"yes", "no", "-1"}
+    oneway_series = edges["oneway"].astype(str) if "oneway" in edges.columns else None
+    speed_series = edges["speed_kph"] if "speed_kph" in edges.columns else None
+    length_series = edges["length"] if "length" in edges.columns else None
+
+    return {
+        "missing_edge_id": int(edges["edge_id"].isna().sum()) if "edge_id" in edges.columns else len(edges),
+        "missing_length": int(length_series.isna().sum()) if length_series is not None else len(edges),
+        "nonpositive_length": int((length_series <= 0).sum()) if length_series is not None else len(edges),
+        "short_links_lt_10m": int((length_series < 10).sum()) if length_series is not None else 0,
+        "very_short_links_lt_5m": int((length_series < 5).sum()) if length_series is not None else 0,
+        "long_links_gt_10km": int((length_series > 10_000).sum()) if length_series is not None else 0,
+        "missing_speed_kph": int(speed_series.isna().sum()) if speed_series is not None else len(edges),
+        "speed_kph_min": float(speed_series.min()) if speed_series is not None and len(speed_series) else None,
+        "speed_kph_max": float(speed_series.max()) if speed_series is not None and len(speed_series) else None,
+        "invalid_oneway_values": int((~oneway_series.isin(valid_oneway_values)).sum())
+        if oneway_series is not None else len(edges),
+        "missing_geometry": int(edges.geometry.isna().sum()) if "geometry" in edges.columns else len(edges),
+    }
+
+
+def duplicate_coords_at_precision(G, precision: int = 7) -> list[tuple]:
+    """Return node-ID pairs that collapse to the same rounded coordinate pair."""
+    nodes_gdf, _ = ox.graph_to_gdfs(G)
+    coord_map = {}
+    dupes = []
+    for node_id, row in nodes_gdf.iterrows():
+        key = (round(row["x"], precision), round(row["y"], precision))
+        if key in coord_map:
+            dupes.append((coord_map[key], node_id))
+        else:
+            coord_map[key] = node_id
+    return dupes
+
+
+def nodes_within_distance(G, threshold_m: float) -> list[tuple]:
+    """Return node-ID pairs that are closer than the given threshold in meters."""
+    graph_projected = ox.project_graph(G)
+    nodes_proj, _ = ox.graph_to_gdfs(graph_projected)
+    node_ids = list(nodes_proj.index)
+    points = [row.geometry for _, row in nodes_proj.iterrows()]
+    tree = shapely.STRtree(points)
+
+    close = []
+    for i, pt in enumerate(points):
+        for j in tree.query(pt.buffer(threshold_m)):
+            if j > i:
+                close.append((node_ids[i], node_ids[j]))
+    return close
+
+
+def summarize_graph_validation(G, close_threshold_m: float = 0.5) -> dict:
+    """Summarize graph-level validation checks and anomaly counts."""
+    _, edges = ox.graph_to_gdfs(G)
+    highway_counts = (
+        edges["highway"].explode().astype(str).value_counts().head(8).to_dict()
+        if "highway" in edges.columns
+        else {}
+    )
+    duplicate_pairs = duplicate_coords_at_precision(G)
+    close_pairs = nodes_within_distance(G, threshold_m=close_threshold_m)
+    self_loops = list(nx.selfloop_edges(G))
+    isolates = list(nx.isolates(G))
+
+    summary = {
+        "nodes": G.number_of_nodes(),
+        "edges": G.number_of_edges(),
+        "self_loops": len(self_loops),
+        "isolated_nodes": len(isolates),
+        "weakly_connected": nx.is_weakly_connected(G),
+        "duplicate_xml_coordinate_pairs": len(duplicate_pairs),
+        "close_node_pairs_lt_0_5m": len(close_pairs),
+        "duplicate_examples": duplicate_pairs[:5],
+        "close_examples": close_pairs[:5],
+        "highway_type_counts": highway_counts,
+    }
+    summary.update(summarize_edge_quality(G))
+    return summary
+
+
+def format_validation_summary(summary: dict, title: str = "Validation checks") -> str:
+    """Render a readable validation report for users and tests."""
+    lines = [
+        f"{title}:",
+        f"- nodes: {summary['nodes']}",
+        f"- edges: {summary['edges']}",
+        f"- self-loops: {summary['self_loops']}",
+        f"- isolated nodes: {summary['isolated_nodes']}",
+        f"- weakly connected: {summary['weakly_connected']}",
+        f"- duplicate XML-rounded coordinate pairs: {summary['duplicate_xml_coordinate_pairs']}",
+        f"- node pairs within 0.5m: {summary['close_node_pairs_lt_0_5m']}",
+        f"- missing edge_id values: {summary['missing_edge_id']}",
+        f"- missing length values: {summary['missing_length']}",
+        f"- nonpositive lengths: {summary['nonpositive_length']}",
+        f"- short links <10m: {summary['short_links_lt_10m']}",
+        f"- very short links <5m: {summary['very_short_links_lt_5m']}",
+        f"- long links >10km: {summary['long_links_gt_10km']}",
+        f"- missing speed_kph values: {summary['missing_speed_kph']}",
+        f"- invalid oneway values: {summary['invalid_oneway_values']}",
+        f"- missing edge geometry: {summary['missing_geometry']}",
+    ]
+    if summary.get("speed_kph_min") is not None:
+        lines.append(
+            f"- speed_kph min/max: {summary['speed_kph_min']:.2f}/{summary['speed_kph_max']:.2f}"
+        )
+    if summary.get("highway_type_counts") is not None:
+        lines.append(f"- highway type counts: {summary['highway_type_counts']}")
+    if "xml_duplicate_coordinate_pairs" in summary:
+        lines.append(
+            f"- XML duplicate coordinate pairs: {summary['xml_duplicate_coordinate_pairs']}"
+        )
+    if "xml_dangling_nd_refs" in summary:
+        lines.append(f"- XML dangling nd refs: {summary['xml_dangling_nd_refs']}")
+    if summary.get("duplicate_examples"):
+        lines.append(f"- duplicate coordinate examples: {summary['duplicate_examples']}")
+    if summary.get("close_examples"):
+        lines.append(f"- close node examples: {summary['close_examples']}")
+    if summary.get("xml_dangling_examples"):
+        lines.append(f"- XML dangling nd examples: {summary['xml_dangling_examples']}")
+    return "\n".join(lines)
+
+
 def adjust_and_add_graph(graphs, current_graph):
     # Get nodes and edges of current graph
     current_nodes, current_edges = ox.graph_to_gdfs(current_graph)
@@ -395,6 +558,8 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
 
     # Apply OSMNX settings
     for setting, value in _network_config["osmnx_settings"].items():
+        if setting == "overpass_urls":
+            continue
         setattr(ox.settings, setting, value)
 
     # Extract configuration
@@ -480,13 +645,17 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
                 raise ValueError(f"Invalid layer name: {layer_name}")
 
             # Download OSM network for this layer
-            g = ox.graph_from_polygon(
-                graph_layer,
-                network_type=network_type,
-                simplify=simplify,
-                retain_all=retain_all,
-                truncate_by_edge=truncate_by_edge,
-                custom_filter=custom_filter
+            g = _download_with_overpass_fallback(
+                lambda: ox.graph_from_polygon(
+                    graph_layer,
+                    network_type=network_type,
+                    simplify=simplify,
+                    retain_all=retain_all,
+                    truncate_by_edge=truncate_by_edge,
+                    custom_filter=custom_filter,
+                ),
+                _network_config,
+                context=f"{study_area}:{layer_name}",
             )
             logger.info("    Downloaded: %d nodes, %d edges", g.number_of_nodes(), g.number_of_edges())
 
@@ -539,12 +708,26 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
     # drift) while staying well below the ~2-3m lower bound where real road
     # features begin. reconnect_edges=False is safe here because the graph is
     # already fully reconnected from the first pass.
+    #
+    # OSMnx now stamps rebuilt graphs as already consolidated and rejects a
+    # subsequent pass unless that bookkeeping flag is cleared. We intentionally
+    # run a second pass here as part of the duplicate-coordinate fix, so reset
+    # the flag before the follow-up consolidation.
+    #
+    # Newer OSMnx also drops all edges when rebuild_graph=True and
+    # reconnect_edges=False, so keep reconnect_edges=True here. The second pass
+    # is still useful because it applies a much smaller tolerance after the
+    # first reconnection step has created any residual near-duplicate nodes.
+    g_consolidated.graph["consolidated"] = False
+    for _, node_data in g_consolidated.nodes(data=True):
+        node_data.pop("cluster", None)
+        node_data.pop("osmid_original", None)
     g_consolidated = ox.consolidate_intersections(
         g_consolidated,
         tolerance=1.5,
         rebuild_graph=True,
         dead_ends=False,
-        reconnect_edges=False
+        reconnect_edges=True
     )
 
     # Simplify graph

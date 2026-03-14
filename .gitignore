@@ -9,3 +9,5 @@ build/
 .vscode/
 *.so
 .pytest_cache/
+cache/
+output/

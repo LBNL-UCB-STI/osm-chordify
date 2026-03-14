@@ -190,9 +190,13 @@ def _save_graph_xml(  # noqa: C901
             stacklevel=2,
         )
 
-    try:
+    if (
+        isinstance(data, tuple)
+        and len(data) == 2
+        and all(hasattr(item, "rename") for item in data)
+    ):
         gdf_nodes, gdf_edges = data
-    except ValueError:
+    else:
         gdf_nodes, gdf_edges = ox.convert.graph_to_gdfs(
             data, node_geometry=False, fill_edge_geometry=False
         )
@@ -219,8 +223,9 @@ def _save_graph_xml(  # noqa: C901
 
     # misc. string replacements to meet OSM XML spec
     if "oneway" in gdf_edges.columns:
+        gdf_edges["oneway"] = gdf_edges["oneway"].astype("string")
         # fill blank oneway tags with default (False)
-        gdf_edges.loc[pd.isna(gdf_edges["oneway"]), "oneway"] = oneway
+        gdf_edges.loc[pd.isna(gdf_edges["oneway"]), "oneway"] = "yes" if oneway else "no"
         # Use dict-based exact replacement throughout to avoid substring matches
         gdf_edges.loc[:, "oneway"] = (
             gdf_edges["oneway"].astype(str).replace({"False": "no", "True": "yes"})

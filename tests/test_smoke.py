@@ -1,3 +1,6 @@
+import tomllib
+from pathlib import Path
+
 from osm_chordify import (
     build_osm_by_pop_density,
     export_network,
@@ -27,6 +30,14 @@ def test_module_imports():
     assert callable(save_dataframe)
     assert callable(name_osm_network)
     assert callable(create_osm_highway_filter)
+
+
+def test_osmium_dependency_declared_in_project_metadata():
+    """Verify the Python PBF export dependency is declared for installation."""
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text())
+    dependencies = data["project"]["dependencies"]
+    assert "osmium" in dependencies
 
 
 def test_name_osm_network():

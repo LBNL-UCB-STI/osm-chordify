@@ -1,16 +1,14 @@
 """Export a network graph to one or more file formats."""
 
+import importlib
 import logging
 import os
 import pickle
-import subprocess
 
 import osmnx as ox
 
 from osm_chordify.osm.xml import save_graph_xml
 
-# Absolute path to the package directory (for locating _osm_conf.ini)
-_PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 logger = logging.getLogger(__name__)
 
 DEFAULT_EDGE_TAGS = [
@@ -27,7 +25,7 @@ ALL_FORMATS = {"graphml", "pkl", "gpkg", "osm", "pbf", "geojson"}
 
 
 def export_network(graph, output_dir, name, edge_tags=None, edge_tag_aggs=None,
-                   formats=None, osm_conf_path=None):
+                   formats=None):
     """Export a network graph to one or more file formats.
 
     Parameters
@@ -45,9 +43,6 @@ def export_network(graph, output_dir, name, edge_tags=None, edge_tag_aggs=None,
     formats : set of str, optional
         Which formats to export. Defaults to all:
         ``{"graphml", "pkl", "gpkg", "osm", "pbf", "geojson"}``.
-    osm_conf_path : str, optional
-        Path to ``_osm_conf.ini`` for ogr2ogr. Defaults to the one shipped
-        with the package.
 
     Returns
     -------
@@ -58,8 +53,6 @@ def export_network(graph, output_dir, name, edge_tags=None, edge_tag_aggs=None,
         edge_tags = DEFAULT_EDGE_TAGS
     if formats is None:
         formats = ALL_FORMATS
-    if osm_conf_path is None:
-        osm_conf_path = os.path.join(_PACKAGE_DIR, '_osm_conf.ini')
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -95,23 +88,12 @@ def export_network(graph, output_dir, name, edge_tags=None, edge_tag_aggs=None,
         logger.info("GPKG Network saved to '%s'.", paths["gpkg"])
         exported["gpkg"] = paths["gpkg"]
 
+    g_osm = None
+
     # OSM XML
     if "osm" in formats or "pbf" in formats or "geojson" in formats:
         logger.info("Creating OSM Network...")
-        nodes, edges = ox.graph_to_gdfs(graph)
-
-        # Normalize list-valued columns: simplify_graph(track_merged=True) can
-        # produce list-valued osmid columns (e.g. [123, 456]).  OSM XML only
-        # accepts scalar attribute values, so reduce each list to its minimum
-        # member.  min() is deterministic and consistent with the sorted-osmid
-        # hashing used in create_unique_edge_id.
-        for col in edges.columns:
-            if edges[col].apply(lambda x: isinstance(x, list)).any():
-                edges[col] = edges[col].apply(
-                    lambda x: min(x) if isinstance(x, list) else x
-                )
-
-        g_osm = ox.graph_from_gdfs(nodes, edges, graph_attrs=graph.graph)
+        g_osm = _normalize_graph_for_osm_export(graph)
         save_graph_xml(
             g_osm,
             filepath=paths["osm"],
@@ -121,24 +103,60 @@ def export_network(graph, output_dir, name, edge_tags=None, edge_tag_aggs=None,
         logger.info("OSM Network saved to '%s'.", paths["osm"])
         exported["osm"] = paths["osm"]
 
-    # PBF (requires osmium CLI and an OSM file)
+    # PBF (via pyosmium)
     if "pbf" in formats:
-        cmd = (
-            f"osmium cat {paths['osm']} -o - --output-format pbf,compression=zlib "
-            f"| osmium sort -F pbf - -o {paths['pbf']} --overwrite"
-        )
-        subprocess.run(cmd, shell=True, check=True)
+        _export_pbf_from_osm_xml(paths["osm"], paths["pbf"])
         logger.info("OSM PBF File saved to '%s'", paths["pbf"])
         exported["pbf"] = paths["pbf"]
 
-    # GeoJSON (requires ogr2ogr and a PBF file)
+    # GeoJSON (written directly from the graph edges)
     if "geojson" in formats:
-        cmd = (
-            f'ogr2ogr -f GeoJSON "{paths["geojson"]}" "{paths["pbf"]}" lines '
-            f'--config OSM_CONFIG_FILE "{osm_conf_path}"'
-        )
-        subprocess.run(cmd, shell=True, check=True)
+        if g_osm is None:
+            g_osm = _normalize_graph_for_osm_export(graph)
+        _export_geojson_from_graph(g_osm, paths["geojson"])
         logger.info("OSM GEOJSON File saved to '%s'", paths["geojson"])
         exported["geojson"] = paths["geojson"]
 
     return exported
+
+
+def _normalize_graph_for_osm_export(graph):
+    """Normalize graph edge columns so they can be serialized safely."""
+    nodes, edges = ox.graph_to_gdfs(graph)
+
+    # simplify_graph(track_merged=True) can produce list-valued columns
+    # (most notably osmid). File-based OSM/GeoJSON exports require scalars.
+    for col in edges.columns:
+        if edges[col].apply(lambda x: isinstance(x, list)).any():
+            edges[col] = edges[col].apply(
+                lambda x: min(x) if isinstance(x, list) else x
+            )
+
+    return ox.graph_from_gdfs(nodes, edges, graph_attrs=graph.graph)
+
+
+def _import_pyosmium():
+    try:
+        return importlib.import_module("osmium")
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "PBF export requires the Python package 'osmium' (pyosmium). "
+            "Install it with `pip install osmium`."
+        ) from exc
+
+
+def _export_pbf_from_osm_xml(osm_path, pbf_path):
+    """Convert an OSM XML file to OSM PBF using pyosmium."""
+    osmium = _import_pyosmium()
+    if os.path.exists(pbf_path):
+        os.remove(pbf_path)
+    with osmium.SimpleWriter(pbf_path) as writer:
+        for obj in osmium.FileProcessor(osm_path):
+            writer.add(obj)
+
+
+def _export_geojson_from_graph(graph, geojson_path):
+    """Write graph edges directly to GeoJSON without external CLI tools."""
+    _, edges = ox.graph_to_gdfs(graph)
+    edges = edges.reset_index()
+    edges.to_file(geojson_path, driver="GeoJSON")

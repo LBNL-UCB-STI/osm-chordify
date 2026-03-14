@@ -115,6 +115,7 @@ def collect_census_data(state_fips_code, county_fips_codes, year, census_data_fi
 
         # Save the raw census data
         if census_data_file:
+            os.makedirs(os.path.dirname(census_data_file), exist_ok=True)
             df.to_csv(census_data_file, index=False)
             logger.info("%s population data saved to %s", geo_level.capitalize(), census_data_file)
 
@@ -182,6 +183,7 @@ def collect_geographic_boundaries(state_fips_code, county_fips_codes, year, area
     if os.path.exists(study_area_boundary_geo_path):
         return gpd.read_file(study_area_boundary_geo_path)
     else:
+        os.makedirs(os.path.dirname(study_area_boundary_geo_path), exist_ok=True)
         from pygris import counties, block_groups
 
         if geo_level == 'county':
@@ -406,6 +408,7 @@ def filter_boundaries_by_density(geo_data, pop_data, utm_epsg, geo_level, min_de
     filtered_geo = filtered_geo.to_crs(epsg=4326)
 
     # Save to file for future use
+    os.makedirs(os.path.dirname(density_geo_file), exist_ok=True)
     filtered_geo.to_file(density_geo_file, driver="GeoJSON")
     logger.info("Saved filtered %s boundaries to %s", geo_level, density_geo_file)
 

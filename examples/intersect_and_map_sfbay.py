@@ -1,12 +1,31 @@
 """Intersect an OSM network with zone polygons and map a BEAM network."""
 
+import importlib.util
 import os
+from pathlib import Path
 
 from osm_chordify import intersect_road_network_with_zones, map_osm_with_beam_network
+from osm_chordify.utils.geo import name_osm_network
 
-work_dir = os.path.expanduser("~/Workspace/Simulation/sfbay")
-utm_epsg = 26910
-osm_name = "sfbay-main-residential"
+
+def _load_build_sfbay():
+    path = Path(__file__).with_name("build_sfbay.py")
+    spec = importlib.util.spec_from_file_location("build_sfbay_example", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+build_sfbay = _load_build_sfbay()
+
+work_dir = os.getcwd()
+utm_epsg = build_sfbay.geo_config["utm_epsg"]
+osm_name = name_osm_network(
+    build_sfbay.area_config["name"],
+    build_sfbay.osm_config["graph_layers"],
+    build_sfbay.osm_config["strongly_connected_components"],
+)
 osm_dir = f"{work_dir}/network/{osm_name}"
 
 # --- Step 1: Intersect OSM edges with zone polygons ---

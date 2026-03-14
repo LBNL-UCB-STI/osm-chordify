@@ -57,6 +57,9 @@ def build_osm_by_pop_density(
         osm_config["graph_layers"],
         osm_config.get("strongly_connected_components", False),
     )
+    os.makedirs(work_dir, exist_ok=True)
+    os.makedirs(os.path.join(work_dir, "geo"), exist_ok=True)
+    os.makedirs(os.path.join(work_dir, "network"), exist_ok=True)
     osm_dir = f'{work_dir}/network/{osm_name}'
 
     logger.info("Downloading and preparing OSM-based %s network...", osm_name)

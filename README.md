@@ -36,6 +36,8 @@ To make it persistent, add the line above to your `~/.bashrc`, `~/.zshrc`, or `.
 
 Get a free key at https://api.census.gov/data/key_signup.html.
 
+You can also pass the key directly to the example scripts with `--census-api-key`.
+
 ## API
 
 ```python
@@ -55,14 +57,14 @@ Download and build a multi-layer OSM network. Each layer can target a different 
 
 ```python
 build_osm_by_pop_density(
-    work_dir="~/Workspace/Simulation/sfbay",
+    work_dir="./output",
     osm_config=osm_config,   # osmnx settings, graph layers, filters
     area_config=area_config,  # name, state/county FIPS, census year
-    geo_config=geo_config,    # UTM EPSG, TAZ shapefile path
+    geo_config=geo_config,    # UTM EPSG and projection settings
 )
 ```
 
-The `osm_config` dict defines one or more `graph_layers`, each with a `custom_filter` (Overpass QL highway filter), `geo_level`, optional `min_density_per_km2`, and `buffer_zone_in_meters`. Layers are downloaded independently and merged into a single network exported as GeoJSON + GPKG.
+The `osm_config` dict defines one or more `graph_layers`, each with a `custom_filter` (Overpass QL highway filter), `geo_level`, optional `min_density_per_km2`, and `buffer_zone_in_meters`. Layers are downloaded independently and merged into a single network that can be exported as GraphML, PKL, GPKG, OSM XML, OSM PBF, and GeoJSON.
 
 ### `intersect_road_network_with_zones`
 
@@ -140,6 +142,46 @@ See the [`examples/`](examples/) directory for complete, runnable scripts:
 | [`intersect_and_map_sfbay.py`](examples/intersect_and_map_sfbay.py) | Intersect OSM with polygon grid and map BEAM network |
 | [`diagnose_sfbay.py`](examples/diagnose_sfbay.py) | Run diagnostics on a downloaded PBF |
 
+### Running example builds
+
+The build examples require:
+
+- internet access for Census / pygris / Overpass downloads
+- a Census API key, either in `CENSUS_API_KEY` or passed with `--census-api-key`
+
+Seattle example:
+
+```bash
+./.venv/bin/python examples/build_seattle.py
+```
+
+With an explicit API key and output directory:
+
+```bash
+./.venv/bin/python examples/build_seattle.py \
+  --census-api-key "$CENSUS_API_KEY" \
+  --output-dir ./output
+```
+
+SF Bay example:
+
+```bash
+./.venv/bin/python examples/build_sfbay.py --output-dir ./output
+```
+
+By default, the example scripts write under `./output` relative to the directory you run them from, and they create the needed structure automatically:
+
+- `output/geo/`
+- `output/network/`
+
+After the build completes, the scripts automatically run graph/XML validation unless you disable it:
+
+```bash
+./.venv/bin/python examples/build_seattle.py --skip-validation
+```
+
+The validation step checks topology, duplicate/near-duplicate coordinates, missing edge attributes, and XML node-reference integrity, then prints a readable summary of what it inspected.
+
 To regression-test the resulting network against duplicate-node coordinate issues that can create R5 self-loops, run:
 
 ```bash
@@ -154,7 +196,7 @@ src/osm_chordify/
     main.py              # Orchestration pipeline
     osm/
         graph.py         # OSM network download and preparation
-        export.py        # Network export (GeoJSON, GPKG)
+        export.py        # Network export (GraphML, GPKG, OSM XML, PBF, GeoJSON)
         intersect.py     # Edge-polygon intersection
         analyze.py       # PBF analysis (osmium)
         diagnostics.py   # Network validation
