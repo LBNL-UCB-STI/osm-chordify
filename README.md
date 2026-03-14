@@ -6,6 +6,20 @@ Download, filter, and export OSM road networks using population-density-based bo
 
 Requires Python 3.10+.
 
+From PyPI:
+
+```bash
+pip install osm-chordify
+```
+
+With diagnostics extras:
+
+```bash
+pip install "osm-chordify[diagnostics]"
+```
+
+From GitHub:
+
 ```bash
 pip install git+https://github.com/LBNL-UCB-STI/osm-chordify.git
 ```
@@ -18,7 +32,7 @@ cd osm-chordify
 pip install -e ".[dev]"
 ```
 
-For diagnostics (connectivity checks, link-length histograms):
+For diagnostics in a local clone:
 
 ```bash
 pip install -e ".[diagnostics]"
@@ -195,15 +209,19 @@ src/osm_chordify/
     __init__.py          # Public API
     main.py              # Orchestration pipeline
     osm/
-        graph.py         # OSM network download and preparation
-        export.py        # Network export (GraphML, GPKG, OSM XML, PBF, GeoJSON)
-        intersect.py     # Edge-polygon intersection
-        analyze.py       # PBF analysis (osmium)
+        __init__.py      # OSM subpackage
+        analyze.py       # PBF analysis helpers
         diagnostics.py   # Network validation
+        export.py        # Network export (GraphML, GPKG, OSM XML, PBF, GeoJSON)
+        graph.py         # OSM network download and preparation
+        intersect.py     # Edge-polygon intersection
+        simplify.py      # Graph simplification aggregation helpers
         tags.py          # OSM tag parsing
+        xml.py           # OSM XML serialization
     utils/
-        geo.py           # Geographic utilities
+        __init__.py      # Utility subpackage
         data_collection.py  # Census data and boundaries
-        network.py       # Network-to-intersection mapping
+        geo.py           # Geographic utilities
         io.py            # File I/O helpers
+        network.py       # Network-to-intersection mapping
 ```
