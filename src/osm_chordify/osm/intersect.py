@@ -165,57 +165,102 @@ def intersect_road_network_with_zones(
     zone_attr_cols = [c for c in polygons_gdf.columns if c != "geometry"]
 
     results = []
+    processed_zones = 0
+    hit_zones = 0
+    intersected_edges = 0
     logger.info("Intersecting %d zones with %d edges", len(polys_proj), len(edges_proj))
 
-    for _, poly_row in tqdm(
-        polys_proj.iterrows(), total=len(polys_proj), desc="Processing zones"
-    ):
-        poly_geom = poly_row.geometry
+    with tqdm(
+        total=len(polys_proj),
+        desc="Intersecting zones",
+        unit="zone",
+        dynamic_ncols=True,
+    ) as pbar:
+        for _, poly_row in polys_proj.iterrows():
+            processed_zones += 1
+            poly_geom = poly_row.geometry
 
-        candidates_idx = list(sindex.intersection(poly_geom.bounds))
-        if not candidates_idx:
-            continue
-
-        candidates = edges_proj.iloc[candidates_idx]
-        intersecting = candidates[candidates.geometry.intersects(poly_geom)]
-        if intersecting.empty:
-            continue
-
-        for _, edge_row in intersecting.iterrows():
-            edge_geom = edge_row.geometry
-            intersection_geom = edge_geom.intersection(poly_geom)
-            if intersection_geom.is_empty:
+            candidates_idx = list(sindex.intersection(poly_geom.bounds))
+            if not candidates_idx:
+                pbar.update(1)
+                if processed_zones == 1 or processed_zones % 25 == 0:
+                    pbar.set_postfix(
+                        hit_zones=hit_zones,
+                        pieces=len(results),
+                        edge_hits=intersected_edges,
+                    )
                 continue
 
-            edge_length = edge_geom.length
-            intersection_length = intersection_geom.length
-            proportion = (
-                round(intersection_length / edge_length, 4)
-                if edge_length > 0
-                else 0
-            )
+            candidates = edges_proj.iloc[candidates_idx]
+            intersecting = candidates[candidates.geometry.intersects(poly_geom)]
+            if intersecting.empty:
+                pbar.update(1)
+                if processed_zones == 1 or processed_zones % 25 == 0:
+                    pbar.set_postfix(
+                        hit_zones=hit_zones,
+                        pieces=len(results),
+                        edge_hits=intersected_edges,
+                    )
+                continue
 
-            record = {
-                "proportion": proportion,
-                "geometry": intersection_geom,
-            }
-            if include_edge_length_m:
-                record["edge_length_m"] = round(edge_length, 2)
-            if include_proportional_length_m:
-                record["proportional_length_m"] = round(intersection_length, 2)
+            hit_zones += 1
 
-            for col in edge_attr_cols:
-                record[f"edge_{col}"] = edge_row[col]
+            for _, edge_row in intersecting.iterrows():
+                intersected_edges += 1
+                edge_geom = edge_row.geometry
+                intersection_geom = edge_geom.intersection(poly_geom)
+                if intersection_geom.is_empty:
+                    continue
 
-            for col in proportional_cols:
-                record[f"proportional_{col}"] = edge_row[col] * proportion
+                edge_length = edge_geom.length
+                intersection_length = intersection_geom.length
+                proportion = (
+                    round(intersection_length / edge_length, 4)
+                    if edge_length > 0
+                    else 0
+                )
 
-            for col in zone_attr_cols:
-                record[f"zone_{col}"] = poly_row[col]
+                record = {
+                    "proportion": proportion,
+                    "geometry": intersection_geom,
+                }
+                if include_edge_length_m:
+                    record["edge_length_m"] = round(edge_length, 2)
+                if include_proportional_length_m:
+                    record["proportional_length_m"] = round(intersection_length, 2)
 
-            results.append(record)
+                for col in edge_attr_cols:
+                    record[f"edge_{col}"] = edge_row[col]
 
-    logger.info("Intersection produced %d results", len(results))
+                for col in proportional_cols:
+                    record[f"proportional_{col}"] = edge_row[col] * proportion
+
+                for col in zone_attr_cols:
+                    record[f"zone_{col}"] = poly_row[col]
+
+                results.append(record)
+
+            pbar.update(1)
+            if processed_zones == 1 or processed_zones % 25 == 0:
+                pbar.set_postfix(
+                    hit_zones=hit_zones,
+                    pieces=len(results),
+                    edge_hits=intersected_edges,
+                )
+
+        pbar.set_postfix(
+            hit_zones=hit_zones,
+            pieces=len(results),
+            edge_hits=intersected_edges,
+        )
+
+    logger.info(
+        "Intersection produced %d results across %d/%d zones (edge hits=%d)",
+        len(results),
+        hit_zones,
+        len(polys_proj),
+        intersected_edges,
+    )
 
     if not results:
         logger.warning("No intersections found — returning empty GeoDataFrame")
