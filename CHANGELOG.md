@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1
+
+- Added area-agnostic PBF diagnostics and comparison workflows, including `diagnose_osm_pbf.py`, `compare_osm_pbf.py`, and corresponding `python -m osm_chordify.main` CLI commands.
+- Added an example workflow for mapping `network.csv(.gz)` to `.osm.pbf` and saving a GeoJSON join, and hardened PBF reading for GDAL/pyogrio indexing quirks.
+- Made the package CLI cleaner by adding lazy package exports and deferring heavy imports so `python -m osm_chordify.main --help` does not emit runtime/import noise.
+- Reworked the example scripts to bootstrap the local `src/` tree automatically, so they run directly from a repo checkout without needing `PYTHONPATH=src`.
+- Split the short project overview from the longer operational instructions by keeping the README compact and moving detailed how-to material into `docs/USAGE.md`.
+- Simplified SF Bay and Seattle example wiring, aligned `main.py` with generic CLI-driven workflows, and improved example/test coverage for the new commands.
+
 ## 0.2.0
 
 - Replaced external `osmium` / `ogr2ogr` export subprocesses with Python-backed `.osm.pbf` and GeoJSON export, and added the Python `osmium` dependency to package metadata.
