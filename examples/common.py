@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import pickle
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -26,6 +27,14 @@ from osm_chordify.osm.graph import (
 
 OSM_HIGHWAYS = [
     "motorway", "motorway_link", "trunk", "trunk_link",
+    "primary", "primary_link", "secondary", "secondary_link",
+    "tertiary", "tertiary_link", "unclassified",
+]
+OSM_BACKBONE_HIGHWAYS = [
+    "motorway", "motorway_link", "trunk", "trunk_link",
+    "primary", "primary_link",
+]
+OSM_CONNECTOR_HIGHWAYS = [
     "primary", "primary_link", "secondary", "secondary_link",
     "tertiary", "tertiary_link", "unclassified",
 ]
@@ -63,6 +72,16 @@ def highway_filter(include_residential: bool = False) -> str:
     if include_residential:
         highway_types.update(OSM_RESIDENTIAL)
     return create_osm_highway_filter(sorted(highway_types))
+
+
+def backbone_highway_filter() -> str:
+    """Return the major-highway filter for backbone network downloads."""
+    return create_osm_highway_filter(OSM_BACKBONE_HIGHWAYS)
+
+
+def connector_highway_filter() -> str:
+    """Return the connector-highway filter for neighborhood/town connectivity."""
+    return create_osm_highway_filter(OSM_CONNECTOR_HIGHWAYS)
 
 
 def base_osm_config(*, tolerance: int, strongly_connected_components: bool) -> dict:
@@ -128,18 +147,53 @@ def validate_exported_osm_xml(osm_path: str) -> dict:
         "xml_dangling_examples": dangling[:5],
     }
 
-def validate_built_network(graph, osm_path: str | None = None, close_threshold_m: float = 0.5) -> dict:
-    """Validate graph- and XML-level integrity for a built network."""
-    summary = summarize_graph_validation(graph, close_threshold_m=close_threshold_m)
 
+def infer_sidecar_paths(pbf_path: str | Path) -> tuple[Path | None, Path | None]:
+    """Infer sibling graph and OSM XML artifacts for a built PBF."""
+    pbf_path = Path(pbf_path).expanduser().resolve()
+    base_name = pbf_path.name
+    if base_name.endswith(".osm.pbf"):
+        stem = base_name[:-8]
+        osm_path = pbf_path.with_name(f"{stem}.osm")
+        pkl_path = pbf_path.with_name(f"{stem}.pkl")
+        graphml_path = pbf_path.with_name(f"{stem}.graphml")
+    else:
+        stem = pbf_path.stem
+        osm_path = pbf_path.with_name(f"{stem}.osm")
+        pkl_path = pbf_path.with_name(f"{stem}.pkl")
+        graphml_path = pbf_path.with_name(f"{stem}.graphml")
+
+    graph_path = pkl_path if pkl_path.exists() else graphml_path if graphml_path.exists() else None
+    return graph_path, osm_path if osm_path.exists() else None
+
+
+def load_built_graph(graph_path: str | Path):
+    """Load a built graph from a sibling pickle or GraphML artifact."""
+    graph_path = Path(graph_path).expanduser().resolve()
+    if graph_path.suffix == ".pkl":
+        with open(graph_path, "rb") as f:
+            return pickle.load(f)
+    if graph_path.suffix == ".graphml":
+        return ox.load_graphml(graph_path)
+    raise ValueError(f"Unsupported graph sidecar format: {graph_path}")
+
+
+def build_validation_summary(graph, osm_path: str | None = None, close_threshold_m: float = 0.5) -> dict:
+    """Build a validation summary without raising."""
+    summary = summarize_graph_validation(graph, close_threshold_m=close_threshold_m)
     if osm_path:
         summary.update(validate_exported_osm_xml(osm_path))
+    return summary
+
+def validate_built_network(graph, osm_path: str | None = None, close_threshold_m: float = 0.5) -> dict:
+    """Validate graph- and XML-level integrity for a built network."""
+    summary = build_validation_summary(graph, osm_path=osm_path, close_threshold_m=close_threshold_m)
 
     print(format_validation_summary(summary, title="Validation checks"))
 
     problems = []
-    if summary["self_loops"]:
-        problems.append(f"self_loops={summary['self_loops']}")
+    if summary["unprotected_self_loops"]:
+        problems.append(f"unprotected_self_loops={summary['unprotected_self_loops']}")
     if summary["isolated_nodes"]:
         problems.append(f"isolated_nodes={summary['isolated_nodes']}")
     if not summary["weakly_connected"]:

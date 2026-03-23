@@ -12,7 +12,9 @@ from _bootstrap import bootstrap_example_paths
 bootstrap_example_paths(__file__)
 
 from common import (
+    backbone_highway_filter,
     base_osm_config,
+    connector_highway_filter,
     highway_filter,
     run_example_build,
 )
@@ -33,17 +35,27 @@ geo_config = {
 
 osm_config = base_osm_config(tolerance=2, strongly_connected_components=False)
 osm_config["graph_layers"] = {
-    "main": {
+    "backbone": {
+        "layer_role": "backbone",
         "geo_level": "county",
-        "custom_filter": highway_filter(),
-        "buffer_zone_in_meters": 200,
+        "custom_filter": backbone_highway_filter(),
+        "buffer_zone_in_meters": 5000,
+        "protected_backbone": True,
+    },
+    "connector": {
+        "layer_role": "connector",
+        "geo_level": "county",
+        "custom_filter": connector_highway_filter(),
+        "buffer_zone_in_meters": 180,
     },
     "ferry": {
+        "layer_role": "ferry",
         "geo_level": "county",
         "custom_filter": '["route"="ferry"]',
         "buffer_zone_in_meters": 10000,
     },
     "residential": {
+        "layer_role": "residential",
         "min_density_per_km2": 120,
         "geo_level": "cbg",
         "custom_filter": highway_filter(include_residential=True),

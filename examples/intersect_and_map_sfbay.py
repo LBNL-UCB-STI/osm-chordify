@@ -1,6 +1,5 @@
 """Intersect an OSM network with zone polygons and map a BEAM network."""
 
-import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -16,24 +15,29 @@ bootstrap_example_paths(__file__)
 from osm_chordify import intersect_road_network_with_zones, map_osm_with_beam_network
 from osm_chordify.utils.geo import name_osm_network
 
-
-def _load_build_sfbay():
-    path = Path(__file__).with_name("build_sfbay.py")
-    spec = importlib.util.spec_from_file_location("build_sfbay_example", path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec is not None and spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
-
-
-build_sfbay = _load_build_sfbay()
-
 work_dir = os.getcwd()
-utm_epsg = build_sfbay.geo_config["utm_epsg"]
+utm_epsg = 26910  # NAD83 / UTM zone 10N
+area_name = "sfbay"
+graph_layers = {
+    "backbone": {
+        "layer_role": "backbone",
+        "geo_level": "county",
+    },
+    "connector": {
+        "layer_role": "connector",
+        "geo_level": "county",
+    },
+    "residential": {
+        "layer_role": "residential",
+        "min_density_per_km2": 5500,
+        "geo_level": "cbg",
+    },
+}
+strongly_connected_components = True
 osm_name = name_osm_network(
-    build_sfbay.area_config["name"],
-    build_sfbay.osm_config["graph_layers"],
-    build_sfbay.osm_config["strongly_connected_components"],
+    area_name,
+    graph_layers,
+    strongly_connected_components,
 )
 osm_dir = f"{work_dir}/network/{osm_name}"
 

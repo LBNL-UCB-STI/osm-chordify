@@ -78,6 +78,18 @@ If a sibling `.pkl`, `.graphml`, or `.osm` file exists next to the PBF, the scri
 
 The PBF diagnostics step uses the optional `pyrosm` dependency. Histogram output also uses `matplotlib` when available; if `matplotlib` is missing, diagnostics still run and only the histogram is skipped.
 
+To compare two built `.osm.pbf` artifacts:
+
+```bash
+./.venv/bin/python examples/compare_osm_pbf.py \
+  ./output/network/network-a/network-a.osm.pbf \
+  ./output/network/network-b/network-b.osm.pbf \
+  --epsg-utm-a 32048 \
+  --epsg-utm-b 32048
+```
+
+When sibling `.pkl`, `.graphml`, or `.osm` files exist, the comparison also includes the build-validation metrics and reports deltas for the two artifacts.
+
 ## Project structure
 
 ```text

@@ -38,6 +38,27 @@ def test_build_examples_define_string_custom_filters():
                 )
 
 
+def test_build_examples_use_fused_regional_and_cbg_residential_layer_roles():
+    for name, relative_path in (
+        ("build_sfbay", "examples/build_sfbay.py"),
+        ("build_seattle", "examples/build_seattle.py"),
+    ):
+        module = _load_module(name, relative_path)
+        layers = module.osm_config["graph_layers"]
+
+        assert layers["backbone"]["layer_role"] == "backbone"
+        assert layers["backbone"]["geo_level"] == "county"
+        assert layers["connector"]["layer_role"] == "connector"
+        assert layers["connector"]["geo_level"] == "county"
+
+        if "ferry" in layers:
+            assert layers["ferry"]["layer_role"] == "ferry"
+            assert layers["ferry"]["geo_level"] == "county"
+
+        assert layers["residential"]["layer_role"] == "residential"
+        assert layers["residential"]["geo_level"] == "cbg"
+
+
 def test_examples_use_public_package_imports():
     for relative_path in (
         "examples/build_sfbay.py",
@@ -73,6 +94,119 @@ def test_diagnose_osm_pbf_exposes_help():
     assert "--epsg-utm" in result.stdout
     assert "--graph-path" in result.stdout
     assert "--osm-xml" in result.stdout
+
+
+def test_compare_osm_pbf_exposes_help():
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "examples/compare_osm_pbf.py"), "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        "compare_osm_pbf.py --help failed.\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "--epsg-utm-a" in result.stdout
+    assert "--epsg-utm-b" in result.stdout
+    assert "--graph-a" in result.stdout
+    assert "--graph-b" in result.stdout
+
+
+def test_map_network_csv_to_osm_pbf_exposes_help():
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "examples/map_network_csv_to_osm_pbf.py"), "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        "map_network_csv_to_osm_pbf.py --help failed.\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "--network-osm-id-col" in result.stdout
+
+
+def test_main_module_exposes_cli_help():
+    env = os.environ.copy()
+    src_path = str(ROOT / "src")
+    env["PYTHONPATH"] = src_path if not env.get("PYTHONPATH") else f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "osm_chordify.main", "--help"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        "python -m osm_chordify.main --help failed.\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "build" in result.stdout
+    assert "intersect" in result.stdout
+    assert "map" in result.stdout
+    assert "diagnose" in result.stdout
+    assert "diagnose-built" in result.stdout
+    assert "compare-pbf" in result.stdout
+    assert "map-pbf" in result.stdout
+
+
+def test_main_module_exposes_compare_pbf_help():
+    env = os.environ.copy()
+    src_path = str(ROOT / "src")
+    env["PYTHONPATH"] = src_path if not env.get("PYTHONPATH") else f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "osm_chordify.main", "compare-pbf", "--help"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        "python -m osm_chordify.main compare-pbf --help failed.\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "--pbf-a" in result.stdout
+    assert "--pbf-b" in result.stdout
+    assert "--epsg-utm-a" in result.stdout
+
+
+def test_main_module_exposes_map_pbf_help():
+    env = os.environ.copy()
+    src_path = str(ROOT / "src")
+    env["PYTHONPATH"] = src_path if not env.get("PYTHONPATH") else f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "osm_chordify.main", "map-pbf", "--help"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        "python -m osm_chordify.main map-pbf --help failed.\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "--network-csv-path" in result.stdout
+    assert "--osm-pbf-path" in result.stdout
+    assert "--output-geojson-path" in result.stdout
 
 
 def test_diagnose_osm_pbf_runs_as_a_script_without_executing_diagnostics(tmp_path):

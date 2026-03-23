@@ -61,6 +61,12 @@ Core functions:
 
 Networks can be exported as GraphML, PKL, GPKG, OSM XML, OSM PBF, and GeoJSON.
 
+You can also run the main workflows via CLI:
+
+```bash
+python -m osm_chordify.main --help
+```
+
 ## Examples
 
 See the [`examples/`](examples/) directory for complete, runnable scripts:
@@ -69,6 +75,7 @@ See the [`examples/`](examples/) directory for complete, runnable scripts:
 |--------|-------------|
 | [`build_sfbay.py`](examples/build_sfbay.py) | Build OSM network for the SF Bay Area (9 counties) |
 | [`build_seattle.py`](examples/build_seattle.py) | Build OSM network for Seattle metro (4 counties + ferry) |
+| [`compare_osm_pbf.py`](examples/compare_osm_pbf.py) | Compare validation and diagnostics metrics across two built `.osm.pbf` artifacts |
 | [`intersect_and_map_sfbay.py`](examples/intersect_and_map_sfbay.py) | Intersect OSM with polygon grid and map BEAM network |
 | [`diagnose_osm_pbf.py`](examples/diagnose_osm_pbf.py) | Validate and diagnose a built `.osm.pbf` artifact |
 

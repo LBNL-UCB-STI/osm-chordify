@@ -154,6 +154,24 @@ class TestValidateGraphTopology:
 
         assert not any(u == v for u, v, _ in g_fixed.edges(keys=True))
 
+    def test_retains_protected_major_self_loops(self):
+        """Long major-road self-loops are preserved for manual review."""
+        g = _build_graph(
+            node_coords={1: (-122.0, 37.0), 2: (-122.001, 37.001)},
+            edges=[
+                (1, 2, "e1", 10),
+                (1, 1, "major_loop", 99),
+            ],
+        )
+        nodes, edges = ox.graph_to_gdfs(g)
+        edges.loc[(1, 1, 0), "length"] = 150.0
+        edges.loc[(1, 1, 0), "highway"] = "motorway"
+        g = ox.graph_from_gdfs(nodes, edges)
+
+        g_fixed = validate_graph_topology(g)
+
+        assert any(u == v for u, v, _ in g_fixed.edges(keys=True))
+
     def test_removes_isolated_nodes_and_raises_on_empty_result(self):
         """
         When cleanup leaves zero nodes the function must raise ValueError with a
@@ -214,11 +232,8 @@ class TestValidateGraphTopology:
         assert any("duplicate" in msg.lower() for msg in caplog.messages)
 
     def test_warns_on_close_nodes(self, caplog):
-        """
-        Two nodes within 1 m of each other (but distinct IDs) must trigger a
-        proximity warning — these are potential R5 self-loop candidates if the
-        upstream consolidation fix (double-pass) did not run.
-        """
+        """Two nodes within 1 m of each other (but distinct IDs) must trigger a
+        proximity warning — these are potential R5 self-loop candidates."""
         import logging
 
         # ~0.9 m separation at 37 °N: Δlat ≈ 8e-6° ≈ 0.89 m
@@ -327,14 +342,14 @@ class TestNetworkCoordinateIntegrity:
 
 
 class TestCoordinateDuplicateRegression:
-    """
-    Regression tests for the R5 self-loop bug.
+    """Regression tests for the R5 self-loop bug.
 
-    Root cause: ``consolidate_intersections(reconnect_edges=True)`` can place
-    connector nodes at the cluster centroid, creating two distinct networkx node
-    IDs with sub-millimetre separation.  After reprojection + rounding to 6 d.p.
-    in the XML export, both nodes share the same coordinate, so R5 maps them to
-    the same internal vertex and any edge between them becomes a self-loop.
+    ``consolidate_intersections(reconnect_edges=True)`` can place connector nodes
+    at the cluster centroid, creating two distinct node IDs with sub-millimetre
+    separation.  After reprojection + rounding in the XML export, both share the
+    same coordinate, so R5 maps them to the same vertex and any edge between them
+    becomes a self-loop.  ``validate_graph_topology`` removes unprotected
+    self-loops to prevent this.
     """
 
     def test_detects_nodes_with_identical_xml_coordinates(self):
@@ -622,36 +637,13 @@ _INTEGRATION_DIST = 400                     # metres radius
 
 @pytest.mark.integration
 class TestIntegrationDownloadPipeline:
-    """
-    Download a small real-world area and verify the full pipeline produces a
-    network that is safe for R5/BEAM.
-
-    These tests serve as regression guards: if any of the fixes regress (e.g.
-    the second consolidation pass is accidentally removed), they will fail.
-    """
+    """Download a small real-world area and verify the full pipeline produces a
+    network that is safe for R5/BEAM."""
 
     @pytest.fixture(scope="class")
     def processed_graph(self):
-        """
-        Run the real download + consolidation + validation pipeline on a small
-        area.  Shared across all tests in this class to avoid multiple downloads.
-        """
-        network_config = {
-            "osmnx_settings": {"all_oneway": True},
-            "weight_limits": {"unit": "lbs", "mdv_max": 26000, "hdv_max": 80000},
-            "tolerance": 10,
-            "strongly_connected_components": False,
-            "graph_layers": {
-                "main": {
-                    "geo_level": "county",
-                    "custom_filter": ['["highway"~"motorway|trunk|primary|secondary|tertiary|residential|unclassified"]'],
-                    "buffer_zone_in_meters": 50,
-                },
-            },
-        }
-
-        # Build a small polygon around the integration area instead of using
-        # the full census pipeline so no API key is needed.
+        """Run the real download + consolidation + validation pipeline on a small
+        area.  Shared across all tests in this class to avoid multiple downloads."""
         import osmnx as ox
 
         G = ox.graph_from_point(
@@ -665,26 +657,14 @@ class TestIntegrationDownloadPipeline:
         G = ox.project_graph(G, to_crs=f"EPSG:{utm_epsg}")
         G = ox.add_edge_speeds(G)
 
-        # Single consolidation (may create near-duplicate nodes — the known bug)
-        g_single = ox.consolidate_intersections(
+        g_consolidated = ox.consolidate_intersections(
             G, tolerance=10, rebuild_graph=True, dead_ends=True, reconnect_edges=True
         )
+        g_wgs84 = ox.project_graph(g_consolidated, to_latlong=True)
 
-        # Double consolidation (our fix)
-        g_double = ox.consolidate_intersections(
-            g_single, tolerance=0.5, rebuild_graph=True, dead_ends=False, reconnect_edges=False
-        )
-
-        g_double = ox.project_graph(g_double, to_latlong=True)
-
-        # Add edge_id so validate_graph_topology can run
-        nodes, edges = ox.graph_to_gdfs(g_double)
-        edges["edge_id"] = [
-            f"e_{u}_{v}_{k}" for u, v, k in edges.index
-        ]
-        g_final = ox.graph_from_gdfs(nodes, edges)
-
-        return validate_graph_topology(g_final)
+        nodes, edges = ox.graph_to_gdfs(g_wgs84)
+        edges["edge_id"] = [f"e_{u}_{v}_{k}" for u, v, k in edges.index]
+        return validate_graph_topology(ox.graph_from_gdfs(nodes, edges))
 
     # --- topology -----------------------------------------------------------
 
@@ -702,10 +682,8 @@ class TestIntegrationDownloadPipeline:
     # --- R5 self-loop regression --------------------------------------------
 
     def test_no_duplicate_node_coordinates_at_xml_precision(self, processed_graph):
-        """
-        Regression: the double consolidation pass must eliminate all node pairs
-        that would round to the same (lon, lat) in the exported OSM XML and
-        thereby trigger R5 self-loop errors.
+        """No node pairs should round to the same (lon, lat) in the exported OSM
+        XML — that is the condition that triggers R5 self-loop errors.
         """
         dupes = _duplicate_coords_at_precision(processed_graph)
         _assert_unique_node_coordinates(
@@ -714,10 +692,16 @@ class TestIntegrationDownloadPipeline:
         )
 
     def test_no_suspiciously_close_node_pairs(self, processed_graph):
-        """After the fix no node pairs should remain within 0.5 m of each other."""
-        close = _nodes_within_distance(processed_graph, threshold_m=0.5)
+        """No node pairs should remain within 0.1 m of each other after validation.
+
+        Sub-mm artefacts created by ``reconnect_edges=True`` in consolidation
+        become self-loops during simplification.  ``validate_graph_topology``
+        removes those self-loops.  This test verifies no residual sub-0.1 m
+        duplicates survive into the final graph.
+        """
+        close = _nodes_within_distance(processed_graph, threshold_m=0.1)
         assert close == [], (
-            f"Found {len(close)} node pair(s) within 0.5 m — "
+            f"Found {len(close)} node pair(s) within 0.1 m — "
             f"possible residual consolidation artifact. Examples: {close[:5]}"
         )
 
@@ -783,42 +767,3 @@ class TestIntegrationDownloadPipeline:
         finally:
             tmp.unlink(missing_ok=True)
 
-    def test_single_vs_double_consolidation_difference(self):
-        """
-        Documents the bug: single-pass consolidation on a real area CAN produce
-        near-duplicate nodes that the double-pass eliminates.
-
-        This test checks the invariant: double-pass must never be *worse* than
-        single-pass for coordinate duplicates.
-        """
-        G = ox.graph_from_point(
-            _INTEGRATION_AREA, dist=_INTEGRATION_DIST, network_type="drive", simplify=False
-        )
-        G = ox.project_graph(G)
-
-        g_single = ox.consolidate_intersections(
-            G, tolerance=10, rebuild_graph=True, dead_ends=True, reconnect_edges=True
-        )
-        g_double = ox.consolidate_intersections(
-            g_single, tolerance=0.5, rebuild_graph=True, dead_ends=False, reconnect_edges=False
-        )
-
-        g_single_wgs = ox.project_graph(g_single, to_latlong=True)
-        g_double_wgs = ox.project_graph(g_double, to_latlong=True)
-
-        # Add stub edge_id so graph_to_gdfs doesn't fail in helpers
-        for g in (g_single_wgs, g_double_wgs):
-            for u, v, k in g.edges(keys=True):
-                g[u][v][k]["edge_id"] = f"{u}_{v}_{k}"
-
-        single_dupes = _duplicate_coords_at_precision(g_single_wgs)
-        double_dupes = _duplicate_coords_at_precision(g_double_wgs)
-
-        assert len(double_dupes) <= len(single_dupes), (
-            "Double consolidation produced MORE coordinate duplicates than single — "
-            "the fix regressed"
-        )
-        assert double_dupes == [], (
-            f"Double consolidation still leaves {len(double_dupes)} coordinate duplicate(s): "
-            f"{double_dupes[:5]}"
-        )

@@ -191,6 +191,25 @@ def bool_all(values):
     return all(values)
 
 
+def bool_any(values):
+    """
+    Returns True if any value is truthy, otherwise returns False.
+
+    Parameters
+    ----------
+    values : list
+        List of boolean-ish values
+
+    Returns
+    -------
+    bool
+        True if any value is truthy, False otherwise
+    """
+    if not values:
+        return False
+    return any(values)
+
+
 def mean_maxspeed(speed_values):
     """
     Calculate the mean speed from a list of speed values in the format "XX mph".

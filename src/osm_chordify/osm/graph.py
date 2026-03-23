@@ -1,6 +1,7 @@
 """Graph processing: ferry edges, topology, validation, and download pipeline."""
 
 import hashlib
+import json
 import logging
 import os
 import pickle
@@ -14,6 +15,7 @@ from networkx.algorithms import strongly_connected_components, weakly_connected_
 
 from osm_chordify.osm.simplify import (
     bool_all,
+    bool_any,
     first_valid_value,
     mean_maxspeed,
     median_lanes,
@@ -37,6 +39,15 @@ from osm_chordify.utils.geo import project_graph, to_convex_hull
 
 logger = logging.getLogger(__name__)
 
+PROTECTED_HIGHWAY_TYPES = {
+    "motorway",
+    "motorway_link",
+    "trunk",
+    "trunk_link",
+    "primary",
+    "primary_link",
+}
+
 
 def _get_overpass_urls(network_config: dict) -> list[str]:
     """Return the ordered list of Overpass endpoints to try."""
@@ -54,24 +65,47 @@ def _download_with_overpass_fallback(download_fn, network_config: dict, context:
     if not overpass_urls:
         return download_fn()
 
+    original_url = ox.settings.overpass_url
     errors = []
-    for overpass_url in overpass_urls:
-        ox.settings.overpass_url = overpass_url
-        try:
-            logger.info("Downloading %s via Overpass endpoint %s", context, overpass_url)
-            return download_fn()
-        except Exception as exc:  # pragma: no cover - exercised via monkeypatch in tests
-            logger.warning(
-                "Overpass download failed for %s via %s: %s",
-                context,
-                overpass_url,
-                exc,
-            )
-            errors.append(f"{overpass_url}: {exc}")
+    try:
+        for overpass_url in overpass_urls:
+            ox.settings.overpass_url = overpass_url
+            try:
+                logger.info("Downloading %s via Overpass endpoint %s", context, overpass_url)
+                return download_fn()
+            except Exception as exc:  # pragma: no cover - exercised via monkeypatch in tests
+                logger.warning(
+                    "Overpass download failed for %s via %s: %s",
+                    context,
+                    overpass_url,
+                    exc,
+                )
+                errors.append(f"{overpass_url}: {exc}")
+    finally:
+        ox.settings.overpass_url = original_url
 
     raise RuntimeError(
         f"All Overpass endpoints failed for {context}. "
         f"Tried: {overpass_urls}. Errors: {' | '.join(errors)}"
+    )
+
+
+def _raw_graph_cache_path(network_config: dict, area_config: dict, work_dir: str) -> str:
+    """Build a cache path that changes when the area/layer download config changes."""
+    cache_descriptor = {
+        "study_area": area_config["name"],
+        "census_year": area_config["census_year"],
+        "state_fips": area_config["state_fips"],
+        "county_fips": area_config["county_fips"],
+        "graph_layers": network_config["graph_layers"],
+    }
+    cache_hash = hashlib.md5(
+        json.dumps(cache_descriptor, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:10]
+    return os.path.join(
+        work_dir,
+        "network",
+        f"raw_osm_graph_{area_config['name']}_{cache_hash}.pkl",
     )
 
 
@@ -130,6 +164,59 @@ def process_ferry_edges(ferry_graph) -> nx.MultiDiGraph:
     g_ferry_reconstructed = ox.graph_from_gdfs(selected_nodes, selected_edges)
 
     return g_ferry_reconstructed
+
+
+def _normalize_highway_values(value) -> set[str]:
+    """Normalize an edge highway value into a comparable set of strings."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return set()
+    if isinstance(value, list):
+        values = value
+    else:
+        values = [value]
+    normalized = set()
+    for item in values:
+        if item is None or pd.isna(item):
+            continue
+        normalized.add(str(item))
+    return normalized
+
+
+def _is_truthy_osm_tag(value) -> bool:
+    """Interpret common OSM-style truthy values."""
+    if isinstance(value, bool):
+        return value
+    if value is None or pd.isna(value):
+        return False
+    return str(value).strip().lower() in {"yes", "true", "1"}
+
+
+def _edge_is_protected(edge_data: dict) -> bool:
+    """Return True when an edge should be preserved during conservative cleanup."""
+    if edge_data.get("protected_backbone"):
+        return True
+    if edge_data.get("layer_role") == "backbone":
+        return True
+    highway_values = _normalize_highway_values(edge_data.get("highway"))
+    if highway_values & PROTECTED_HIGHWAY_TYPES:
+        return True
+    if _is_truthy_osm_tag(edge_data.get("bridge")) or _is_truthy_osm_tag(edge_data.get("tunnel")):
+        return True
+    return False
+
+
+def _split_self_loops_for_cleanup(G: nx.MultiDiGraph):
+    """Partition self-loop edges into removable artifacts and retained protected loops."""
+    removable = []
+    retained = []
+    for u, v, key in nx.selfloop_edges(G, keys=True):
+        edge_data = G[u][v][key]
+        should_remove = not _edge_is_protected(edge_data)
+        if should_remove:
+            removable.append((u, v, key))
+        else:
+            retained.append((u, v, key))
+    return removable, retained
 
 
 def process_tags(_g: nx.MultiDiGraph, config: dict) -> nx.MultiDiGraph:
@@ -278,33 +365,24 @@ def validate_graph_topology(G):
     original_nodes = G.number_of_nodes()
     original_edges = G.number_of_edges()
     self_loops_removed = 0
+    protected_self_loops_retained = 0
     isolated_nodes_removed = 0
 
     # 1. Remove self-loops
-    self_loops = list(nx.selfloop_edges(G))
-    if self_loops:
-        logger.info("Found %d self-loop edges - removing", len(self_loops))
-        # Show example with proper MultiDiGraph key handling
-        if len(self_loops) > 0:
-            # Handle both tuple formats from selfloop_edges
-            first_loop = self_loops[0]
-            if len(first_loop) == 3:
-                u, v, key = first_loop
-            else:
-                u, v = first_loop
-                key = 0
-
-            # Access edge data properly for MultiDiGraph
-            if G.is_multigraph():
-                edge_data = G[u][v][key]
-            else:
-                edge_data = G[u][v]
-
-            logger.debug("  Example: Node %s->%s, length=%sm", u, u, edge_data.get('length', 'N/A'))
-
-        # Remove all self-loops
-        G.remove_edges_from(self_loops)
-        self_loops_removed = len(self_loops)
+    removable_self_loops, retained_self_loops = _split_self_loops_for_cleanup(G)
+    if removable_self_loops:
+        logger.info(
+            "Found %d removable self-loop edges - removing non-protected loops",
+            len(removable_self_loops),
+        )
+        G.remove_edges_from(removable_self_loops)
+        self_loops_removed = len(removable_self_loops)
+    if retained_self_loops:
+        protected_self_loops_retained = len(retained_self_loops)
+        logger.warning(
+            "Retaining %d protected self-loop edges on major/backbone infrastructure",
+            protected_self_loops_retained,
+        )
 
     # 2. Remove isolated nodes
     isolated = list(nx.isolates(G))
@@ -380,11 +458,18 @@ def validate_graph_topology(G):
         logger.debug("Proximity check skipped: %s", e)
 
     # Summary if changes were made
-    if self_loops_removed > 0 or isolated_nodes_removed > 0:
+    if self_loops_removed > 0 or isolated_nodes_removed > 0 or protected_self_loops_retained > 0:
         final_nodes = G.number_of_nodes()
         final_edges = G.number_of_edges()
-        logger.info("Network validation: %d->%d nodes, %d->%d edges",
-                    original_nodes, final_nodes, original_edges, final_edges)
+        logger.info(
+            "Network validation: %d->%d nodes, %d->%d edges (removed_self_loops=%d, retained_protected_self_loops=%d)",
+            original_nodes,
+            final_nodes,
+            original_edges,
+            final_edges,
+            self_loops_removed,
+            protected_self_loops_retained,
+        )
 
     return G
 
@@ -461,6 +546,8 @@ def summarize_graph_validation(G, close_threshold_m: float = 0.5) -> dict:
         "nodes": G.number_of_nodes(),
         "edges": G.number_of_edges(),
         "self_loops": len(self_loops),
+        "protected_self_loops": sum(1 for u, v, k in self_loops if _edge_is_protected(G[u][v][k])),
+        "unprotected_self_loops": sum(1 for u, v, k in self_loops if not _edge_is_protected(G[u][v][k])),
         "isolated_nodes": len(isolates),
         "weakly_connected": nx.is_weakly_connected(G),
         "duplicate_xml_coordinate_pairs": len(duplicate_pairs),
@@ -480,6 +567,8 @@ def format_validation_summary(summary: dict, title: str = "Validation checks") -
         f"- nodes: {summary['nodes']}",
         f"- edges: {summary['edges']}",
         f"- self-loops: {summary['self_loops']}",
+        f"- protected self-loops: {summary['protected_self_loops']}",
+        f"- unprotected self-loops: {summary['unprotected_self_loops']}",
         f"- isolated nodes: {summary['isolated_nodes']}",
         f"- weakly connected: {summary['weakly_connected']}",
         f"- duplicate XML-rounded coordinate pairs: {summary['duplicate_xml_coordinate_pairs']}",
@@ -513,6 +602,105 @@ def format_validation_summary(summary: dict, title: str = "Validation checks") -
     if summary.get("xml_dangling_examples"):
         lines.append(f"- XML dangling nd examples: {summary['xml_dangling_examples']}")
     return "\n".join(lines)
+
+
+def _log_bridge_tunnel_stats(G: nx.MultiDiGraph, stage: str) -> None:
+    """Log the number of bridge/tunnel edges at a given pipeline stage.
+
+    Used to track when bridges are severed during consolidation, simplification,
+    or topology cleanup.  Comparing counts across stages pinpoints the culprit.
+    """
+    bridge_count = 0
+    tunnel_count = 0
+    for u, v, k, data in G.edges(data=True, keys=True):
+        if _is_truthy_osm_tag(data.get("bridge")):
+            bridge_count += 1
+        if _is_truthy_osm_tag(data.get("tunnel")):
+            tunnel_count += 1
+    logger.info(
+        "  [%s] bridge edges: %d, tunnel edges: %d",
+        stage, bridge_count, tunnel_count,
+    )
+
+
+def _warn_if_major_infrastructure_removed(G: nx.MultiDiGraph, removed_node_ids: set) -> None:
+    """Log per-fragment detail for every disconnected component that was removed.
+
+    Called after the largest-connected-component extraction.  For each fragment
+    we report node/edge counts, highway type breakdown, bridge/tunnel edge count,
+    total edge length, and geographic bbox — enough to judge whether a fragment
+    represents a meaningful road segment or a trivial isolated stub.
+    """
+    major_types = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link"}
+
+    # Partition removed nodes into their own weakly-connected sub-components.
+    removed_subgraph = G.subgraph(removed_node_ids)
+    fragments = sorted(
+        nx.weakly_connected_components(removed_subgraph), key=len, reverse=True
+    )
+
+    total_major_edges = 0
+    total_bt_edges = 0
+
+    for i, comp in enumerate(fragments):
+        sub = G.subgraph(comp)
+        hw_counts: dict[str, int] = {}
+        bt_edges = 0
+        total_length = 0.0
+        lons, lats = [], []
+
+        for n in comp:
+            nd = G.nodes[n]
+            x, y = nd.get("x"), nd.get("y")
+            if x is not None and y is not None:
+                lons.append(x)
+                lats.append(y)
+
+        for u, v, k, data in sub.edges(data=True, keys=True):
+            hw = data.get("highway", "unknown")
+            if isinstance(hw, list):
+                hw = hw[0] if hw else "unknown"
+            hw = str(hw).strip()
+            hw_counts[hw] = hw_counts.get(hw, 0) + 1
+            if _is_truthy_osm_tag(data.get("bridge")) or _is_truthy_osm_tag(data.get("tunnel")):
+                bt_edges += 1
+            length = data.get("length")
+            if isinstance(length, (int, float)):
+                total_length += length
+
+        major_found = {k: v for k, v in hw_counts.items() if k in major_types}
+        total_major_edges += sum(major_found.values())
+        total_bt_edges += bt_edges
+
+        if not major_found and bt_edges == 0:
+            continue  # minor local-road stub — skip verbose logging
+
+        bbox_str = ""
+        if lons:
+            bbox_str = (
+                f" bbox lon [{min(lons):.4f},{max(lons):.4f}]"
+                f" lat [{min(lats):.4f},{max(lats):.4f}]"
+            )
+
+        logger.warning(
+            "  Fragment %d: %d nodes, %d edges, length=%.0fm"
+            " | major hw: %s | bridge/tunnel: %d%s",
+            i + 1,
+            len(comp),
+            sub.number_of_edges(),
+            total_length,
+            major_found,
+            bt_edges,
+            bbox_str,
+        )
+
+    if total_major_edges > 0 or total_bt_edges > 0:
+        logger.warning(
+            "  Total across all fragments: major-road edges=%d, bridge/tunnel edges=%d",
+            total_major_edges, total_bt_edges,
+        )
+    else:
+        logger.debug("  All removed fragments contain only local roads — no major infrastructure affected")
 
 
 def adjust_and_add_graph(graphs, current_graph):
@@ -573,7 +761,7 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
     should_strongly_connect = _network_config.get("strongly_connected_components", False)
 
     # Cache handling
-    raw_graph_cache_path = os.path.join(work_dir, 'network', f'raw_osm_graph_{study_area}.pkl')
+    raw_graph_cache_path = _raw_graph_cache_path(_network_config, _area_config, work_dir)
     g_combined = None
 
     # Try loading from cache
@@ -598,6 +786,7 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
             min_density = layer_config.get("min_density_per_km2", 0)
             custom_filter = layer_config["custom_filter"]
             buffer_in_meters = layer_config["buffer_zone_in_meters"]
+            layer_role = layer_config.get("layer_role", layer_name)
 
             logger.info("  Processing layer: %s", layer_name)
 
@@ -612,11 +801,14 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
             )
 
             # Configure layer-specific parameters
-            if layer_name == "main":
+            if layer_role in {"main", "backbone", "connector"}:
                 graph_layer = to_convex_hull(region_boundary_wgs84, utm_epsg, buffer_in_meters)
-                network_type, simplify, retain_all, truncate_by_edge = "drive", False, True, True
+                network_type = layer_config.get("network_type", "drive")
+                simplify = layer_config.get("simplify", False)
+                retain_all = layer_config.get("retain_all", True)
+                truncate_by_edge = layer_config.get("truncate_by_edge", True)
 
-            elif layer_name == "residential":
+            elif layer_role == "residential":
                 if min_density > 0:
                     logger.info("    Filtering by density: %s pop/km²", min_density)
 
@@ -637,12 +829,12 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
                 ])
                 network_type, simplify, retain_all, truncate_by_edge = "drive", False, True, True
 
-            elif layer_name == "ferry":
+            elif layer_role == "ferry":
                 graph_layer = to_convex_hull(region_boundary_wgs84, utm_epsg, buffer_in_meters)
                 network_type, simplify, retain_all, truncate_by_edge = "all", True, True, False
 
             else:
-                raise ValueError(f"Invalid layer name: {layer_name}")
+                raise ValueError(f"Invalid layer role: {layer_role} for layer {layer_name}")
 
             # Download OSM network for this layer
             g = _download_with_overpass_fallback(
@@ -660,11 +852,20 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
             logger.info("    Downloaded: %d nodes, %d edges", g.number_of_nodes(), g.number_of_edges())
 
             # Special processing for ferry layer
-            if layer_name == "ferry":
+            if layer_role == "ferry":
                 g = process_ferry_edges(g)
                 if g.number_of_edges() == 0:
                     logger.info("    No suitable ferry connections found - skipping layer")
                     continue
+
+            layer_nodes, layer_edges = ox.graph_to_gdfs(g)
+            layer_edges["source_layer"] = layer_name
+            layer_edges["layer_role"] = layer_role
+            layer_edges["protected_backbone"] = layer_config.get(
+                "protected_backbone",
+                layer_role == "backbone",
+            )
+            g = ox.graph_from_gdfs(layer_nodes, layer_edges)
 
             # Add to list
             adjust_and_add_graph(graphs, g)
@@ -687,6 +888,7 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
 
     # Project to UTM
     g_projected = project_graph(g_combined, to_crs=utm_epsg)
+    _log_bridge_tunnel_stats(g_projected, "raw (after projection)")
 
     # Add speeds and process tags
     g_with_speeds = ox.add_edge_speeds(g_projected)
@@ -700,40 +902,26 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
         dead_ends=True,
         reconnect_edges=True
     )
-
-    # Second consolidation pass: reconnect_edges=True in the first pass can place
-    # connector nodes at the exact centroid of the cluster they reconnect to,
-    # producing two nodes at sub-millimeter separation. 1.5m gives a comfortable
-    # margin over the worst-case artifact offset (~0.5m including reprojection
-    # drift) while staying well below the ~2-3m lower bound where real road
-    # features begin. reconnect_edges=False is safe here because the graph is
-    # already fully reconnected from the first pass.
-    #
-    # OSMnx now stamps rebuilt graphs as already consolidated and rejects a
-    # subsequent pass unless that bookkeeping flag is cleared. We intentionally
-    # run a second pass here as part of the duplicate-coordinate fix, so reset
-    # the flag before the follow-up consolidation.
-    #
-    # Newer OSMnx also drops all edges when rebuild_graph=True and
-    # reconnect_edges=False, so keep reconnect_edges=True here. The second pass
-    # is still useful because it applies a much smaller tolerance after the
-    # first reconnection step has created any residual near-duplicate nodes.
-    g_consolidated.graph["consolidated"] = False
-    for _, node_data in g_consolidated.nodes(data=True):
-        node_data.pop("cluster", None)
-        node_data.pop("osmid_original", None)
-    g_consolidated = ox.consolidate_intersections(
-        g_consolidated,
-        tolerance=1.5,
-        rebuild_graph=True,
-        dead_ends=False,
-        reconnect_edges=True
+    _log_bridge_tunnel_stats(g_consolidated, f"after consolidation (tol={tolerance}m)")
+    logger.info(
+        "After consolidation: %d nodes, %d edges",
+        g_consolidated.number_of_nodes(), g_consolidated.number_of_edges(),
     )
 
     # Simplify graph
     g_simplified = ox.simplification.simplify_graph(
         g_consolidated,
-        edge_attrs_differ=["highway", "lanes", "maxspeed"],
+        # Preserve critical corridor structure at bridge/tunnel and layer
+        # transitions instead of merging straight through them.
+        edge_attrs_differ=[
+            "highway",
+            "lanes",
+            "maxspeed",
+            "bridge",
+            "tunnel",
+            "layer_role",
+            "protected_backbone",
+        ],
         remove_rings=False,
         track_merged=True,
         edge_attr_aggs={
@@ -757,12 +945,18 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
             'maxheight': min_numeric_or_string,
             'maxwidth': min_numeric_or_string,
             'motor_vehicle': yes_no_all,
+            'source_layer': first_valid_value,
+            'layer_role': first_valid_value,
+            'protected_backbone': bool_any,
         }
     )
 
-    # Create unique edge IDs.
-    # After graph_to_gdfs, u/v/key are the MultiIndex — NOT regular columns.
-    # row.name gives (u, v, key); row['u_original'] would KeyError.
+    _log_bridge_tunnel_stats(g_simplified, "after simplification")
+    logger.info(
+        "After simplification: %d nodes, %d edges",
+        g_simplified.number_of_nodes(), g_simplified.number_of_edges(),
+    )
+
     nodes, edges = ox.graph_to_gdfs(g_simplified)
     edges['edge_id'] = [
         create_unique_edge_id(u, v, row['osmid'], k)
@@ -775,6 +969,10 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
 
     # Validate topology and fix issues
     g_validated = validate_graph_topology(g_wgs84)
+    logger.info(
+        "After topology validation: %d nodes, %d edges",
+        g_validated.number_of_nodes(), g_validated.number_of_edges(),
+    )
 
     # Extract largest connected component
     logger.info("Extracting largest connected component...")
@@ -783,10 +981,12 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
     else:
         largest_component = max(weakly_connected_components(g_validated), key=len)
 
-    # Report if nodes were removed
-    removed_nodes = g_validated.number_of_nodes() - len(largest_component)
+    # Report if nodes were removed, and warn if major infrastructure is affected.
+    removed_node_ids = set(g_validated.nodes()) - set(largest_component)
+    removed_nodes = len(removed_node_ids)
     if removed_nodes > 0:
         logger.info("  Removed %d nodes in disconnected components", removed_nodes)
+        _warn_if_major_infrastructure_removed(g_validated, removed_node_ids)
 
     # Create final graph
     g_final = nx.MultiDiGraph(g_validated.subgraph(largest_component).copy())
