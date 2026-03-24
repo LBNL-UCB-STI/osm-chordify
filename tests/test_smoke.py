@@ -9,6 +9,7 @@ from shapely.geometry import LineString
 from osm_chordify import (
     build_osm_by_pop_density,
     export_network,
+    intersect_road_network_with_county_zones,
     intersect_road_network_with_zones,
 )
 from osm_chordify.osm.graph import download_and_prepare_osm_network
@@ -22,6 +23,7 @@ def test_public_api_imports():
     """Verify the public API is importable and callable."""
     assert callable(build_osm_by_pop_density)
     assert callable(export_network)
+    assert callable(intersect_road_network_with_county_zones)
     assert callable(intersect_road_network_with_zones)
     assert callable(download_and_prepare_osm_network)
 

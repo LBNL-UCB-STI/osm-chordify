@@ -265,6 +265,73 @@ def match_road_network_geometries(
     raise NotImplementedError("match_road_network_geometries is not yet implemented")
 
 
+def intersect_road_network_with_county_zones(
+    road_network,
+    road_network_epsg,
+    state_fips_code,
+    county_fips_codes,
+    year,
+    work_dir,
+    area_name="study_area",
+    output_path=None,
+    output_epsg=None,
+):
+    """Intersect a road network with county polygons identified by FIPS codes.
+
+    County geometries are fetched through the shared cached boundary
+    collection path, then passed to
+    :func:`intersect_road_network_with_zones`.
+
+    Parameters
+    ----------
+    road_network : str, os.PathLike, or gpd.GeoDataFrame
+        Road-network edges with line geometries.
+    road_network_epsg : int
+        EPSG code for the road network's CRS.
+    state_fips_code : str
+        State FIPS code.
+    county_fips_codes : list[str] or str
+        County FIPS code(s) within the state.
+    year : int
+        Boundary reference year.
+    work_dir : str
+        Directory used for cached county boundary files.
+    area_name : str, optional
+        Label used in the cached boundary filename.
+    output_path : str, optional
+        If provided, save the result to this file.
+    output_epsg : int, optional
+        EPSG code for the output CRS. Defaults to *road_network_epsg*.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Edge/county intersection pieces with the standard fixed schema.
+    """
+    from osm_chordify.osm.intersect import intersect_road_network_with_zones
+    from osm_chordify.utils.data_collection import collect_geographic_boundaries
+
+    if isinstance(county_fips_codes, str):
+        county_fips_codes = [county_fips_codes]
+
+    county_zones = collect_geographic_boundaries(
+        state_fips_code=state_fips_code,
+        county_fips_codes=county_fips_codes,
+        year=year,
+        area_name=area_name,
+        geo_level="county",
+        work_dir=work_dir,
+    )
+
+    return intersect_road_network_with_zones(
+        road_network=road_network,
+        road_network_epsg=road_network_epsg,
+        zones=county_zones,
+        output_path=output_path,
+        output_epsg=output_epsg,
+    )
+
+
 # ---------------------------------------------------------------------------
 # OSM diagnostics
 # ---------------------------------------------------------------------------

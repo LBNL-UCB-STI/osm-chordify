@@ -90,6 +90,45 @@ To compare two built `.osm.pbf` artifacts:
 
 When sibling `.pkl`, `.graphml`, or `.osm` files exist, the comparison also includes the build-validation metrics and reports deltas for the two artifacts.
 
+## County-zone intersection
+
+To intersect a road network with county polygons selected by FIPS code, use
+`intersect_road_network_with_county_zones(...)`. This uses the same cached
+boundary collection path as the build workflow, so county geometries are
+downloaded/reused automatically under the provided `work_dir`.
+
+Example:
+
+```python
+from osm_chordify import intersect_road_network_with_county_zones
+
+result = intersect_road_network_with_county_zones(
+    road_network="./output/network/sfbay-cbg5500-strongConn-network/sfbay-cbg5500-strongConn-network.gpkg",
+    road_network_epsg=26910,
+    state_fips_code="06",
+    county_fips_codes=["001", "013"],
+    year=2020,
+    work_dir="./output/geo",
+    area_name="alameda-contra-costa",
+    output_path="./output/geo/county-intersections.parquet",
+)
+```
+
+The returned output always includes:
+
+- `zone_edge_proportion`
+- `edge_link_length_m`
+- `zone_link_length_m`
+
+These three columns always refer to the current intersection step. If you
+chain intersections (for example network -> counties -> grid1 -> grid2), the
+latest output's top-level fixed columns are recomputed for that latest step.
+Older carried attributes remain available through the prefixed `edge_...` /
+`zone_...` columns.
+
+`area_name` only controls the cached boundary filename; the actual county
+selection comes from `state_fips_code` and `county_fips_codes`.
+
 ## Project structure
 
 ```text

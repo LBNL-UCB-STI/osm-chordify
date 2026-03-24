@@ -2,6 +2,7 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import LineString, Point, Polygon
 
+from osm_chordify.main import intersect_road_network_with_county_zones
 from osm_chordify.osm.intersect import intersect_road_network_with_zones
 
 
@@ -169,3 +170,156 @@ class TestEmptyIntersectionResult:
         )
         cols = list(result.columns)
         assert cols.index("edge_link_length_m") < cols.index("zone_link_length_m")
+
+
+def test_intersect_road_network_with_county_zones_uses_fips_boundary_fetch(monkeypatch):
+    edges = gpd.GeoDataFrame(
+        {
+            "osm_id": [1],
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [LineString([(0, 0), (10, 0)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    counties = gpd.GeoDataFrame(
+        {
+            "GEOID": ["06001"],
+            "NAME": ["Alameda"],
+            "geometry": [Polygon([(0, -1), (5, -1), (5, 1), (0, 1)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    calls = {}
+
+    def _fake_collect_geographic_boundaries(**kwargs):
+        calls["kwargs"] = kwargs
+        return counties
+
+    monkeypatch.setattr(
+        "osm_chordify.utils.data_collection.collect_geographic_boundaries",
+        _fake_collect_geographic_boundaries,
+    )
+
+    result = intersect_road_network_with_county_zones(
+        road_network=edges,
+        road_network_epsg=3857,
+        state_fips_code="06",
+        county_fips_codes=["001"],
+        year=2020,
+        work_dir="/tmp/osm-chordify-test",
+        area_name="county-test",
+    )
+
+    assert calls["kwargs"]["state_fips_code"] == "06"
+    assert calls["kwargs"]["county_fips_codes"] == ["001"]
+    assert calls["kwargs"]["geo_level"] == "county"
+    assert len(result) == 1
+    assert result.iloc[0]["zone_GEOID"] == "06001"
+
+
+def test_intersection_drops_point_only_boundary_touches():
+    edges = gpd.GeoDataFrame(
+        {
+            "osm_id": [1],
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [LineString([(0, 0), (10, 0)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["A"],
+            "geometry": [Polygon([(10, 0), (11, 0), (11, 1), (10, 1)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    result = intersect_road_network_with_zones(
+        road_network=edges,
+        road_network_epsg=3857,
+        zones=zones,
+    )
+
+    assert len(result) == 0
+
+
+def test_intersection_preserves_prior_prefixed_columns_without_edge_stacking():
+    edges = gpd.GeoDataFrame(
+        {
+            "edge_osm_id": [1],
+            "zone_NAME": ["old_zone"],
+            "zone_edge_proportion": [0.6],
+            "edge_link_length_m": [10.0],
+            "zone_link_length_m": [6.0],
+            "geometry": [LineString([(0, 0), (10, 0)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "NAME": ["new_zone"],
+            "geometry": [Polygon([(0, -1), (5, -1), (5, 1), (0, 1)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    result = intersect_road_network_with_zones(
+        road_network=edges,
+        road_network_epsg=3857,
+        zones=zones,
+    )
+
+    assert "edge_edge_osm_id" not in result.columns
+    assert "zone_zone_NAME" not in result.columns
+    assert "edge_osm_id" in result.columns
+    assert "zone_NAME" in result.columns
+    assert "zone2_NAME" in result.columns
+    assert result.iloc[0]["zone_NAME"] == "old_zone"
+    assert result.iloc[0]["zone2_NAME"] == "new_zone"
+
+
+def test_intersection_loads_parquet_inputs(tmp_path):
+    edges = gpd.GeoDataFrame(
+        {
+            "osm_id": [1],
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [LineString([(0, 0), (10, 0)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["A"],
+            "geometry": [Polygon([(0, -1), (5, -1), (5, 1), (0, 1)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    try:
+        edges_path = tmp_path / "edges.parquet"
+        zones_path = tmp_path / "zones.parquet"
+        edges.to_parquet(edges_path, index=False)
+        zones.to_parquet(zones_path, index=False)
+    except ImportError:
+        pytest.skip("pyarrow is required for parquet intersection input test")
+
+    result = intersect_road_network_with_zones(
+        road_network=edges_path,
+        road_network_epsg=3857,
+        zones=zones_path,
+    )
+
+    assert len(result) == 1
+    assert result.iloc[0]["zone_edge_proportion"] == pytest.approx(0.5, abs=1e-6)

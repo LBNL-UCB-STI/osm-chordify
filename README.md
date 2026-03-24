@@ -46,6 +46,7 @@ You can also pass the key directly to the example scripts with `--census-api-key
 from osm_chordify import (
     build_osm_by_pop_density,
     create_osm_highway_filter,
+    intersect_road_network_with_county_zones,
     intersect_road_network_with_zones,
     map_osm_with_beam_network,
     match_road_network_geometries,
@@ -55,9 +56,18 @@ from osm_chordify import (
 Core functions:
 
 - `build_osm_by_pop_density`: build a multi-layer OSM network from county / tract / CBG boundaries and density filters
+- `intersect_road_network_with_county_zones`: intersect a network with county polygons fetched by state/county FIPS codes
 - `intersect_road_network_with_zones`: intersect network edges with zone polygons
 - `map_osm_with_beam_network`: join BEAM network attributes onto OSM geometries
 - `match_road_network_geometries`: spatially match geometries across two road networks
+
+Intersection outputs always include:
+
+- `zone_edge_proportion`
+- `edge_link_length_m`
+- `zone_link_length_m`
+
+These three columns always describe the latest intersection step. In chained intersections, earlier prefixed `edge_...` / `zone_...` fields are carried forward, but the top-level fixed columns are recomputed for the current step.
 
 Networks can be exported as GraphML, PKL, GPKG, OSM XML, OSM PBF, and GeoJSON.
 

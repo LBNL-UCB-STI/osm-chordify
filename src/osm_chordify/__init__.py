@@ -10,6 +10,7 @@ __all__ = [
     "map_osm_with_beam_network",
     "match_road_network_geometries",
     "diagnose_osm",
+    "intersect_road_network_with_county_zones",
 ]
 
 _EXPORTS = {
@@ -17,6 +18,10 @@ _EXPORTS = {
     "map_osm_with_beam_network": ("osm_chordify.main", "map_osm_with_beam_network"),
     "match_road_network_geometries": ("osm_chordify.main", "match_road_network_geometries"),
     "diagnose_osm": ("osm_chordify.main", "diagnose_osm"),
+    "intersect_road_network_with_county_zones": (
+        "osm_chordify.main",
+        "intersect_road_network_with_county_zones",
+    ),
     "intersect_road_network_with_zones": (
         "osm_chordify.osm.intersect",
         "intersect_road_network_with_zones",
@@ -35,4 +40,3 @@ def __getattr__(name):
     value = getattr(import_module(module_name), attr_name)
     globals()[name] = value
     return value
-

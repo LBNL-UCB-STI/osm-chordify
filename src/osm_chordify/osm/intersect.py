@@ -15,6 +15,8 @@ from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
+LINE_GEOMETRY_TYPES = {"LineString", "MultiLineString"}
+
 
 def load_osm_edges(osm_gpkg_path):
     """Load OSM edges from a GPKG file.
@@ -62,6 +64,8 @@ def _load_edges(road_network):
     path = str(road_network)
     if path.endswith(".gpkg"):
         return load_osm_edges(path)
+    if path.endswith(".parquet"):
+        return gpd.read_parquet(path)
     return gpd.read_file(path)
 
 
@@ -73,7 +77,35 @@ def _load_zones(zones):
         raise TypeError(
             f"zones must be a GeoDataFrame or a file path, got {type(zones).__name__}"
         )
-    return gpd.read_file(str(zones))
+    path = str(zones)
+    if path.endswith(".parquet"):
+        return gpd.read_parquet(path)
+    return gpd.read_file(path)
+
+
+def _edge_output_name(col):
+    """Preserve already-prefixed chained columns instead of stacking edge_ repeatedly."""
+    if col.startswith(("edge_", "zone_")) or col in {
+        "zone_edge_proportion",
+        "edge_link_length_m",
+        "zone_link_length_m",
+    }:
+        return col
+    return f"edge_{col}"
+
+
+def _zone_output_name(col, existing_keys):
+    """Prefix zone attributes and avoid collisions with carried-through columns."""
+    candidate = f"zone_{col}"
+    if candidate not in existing_keys:
+        return candidate
+    candidate = f"zone2_{col}"
+    if candidate not in existing_keys:
+        return candidate
+    suffix = 3
+    while f"zone{suffix}_{col}" in existing_keys:
+        suffix += 1
+    return f"zone{suffix}_{col}"
 
 
 def intersect_road_network_with_zones(
@@ -182,6 +214,8 @@ def intersect_road_network_with_zones(
                 intersection_geom = edge_geom.intersection(poly_geom)
                 if intersection_geom.is_empty:
                     continue
+                if intersection_geom.geom_type not in LINE_GEOMETRY_TYPES:
+                    continue
 
                 edge_length = edge_geom.length
                 intersection_length = intersection_geom.length
@@ -199,10 +233,10 @@ def intersect_road_network_with_zones(
                 }
 
                 for col in edge_attr_cols:
-                    record[f"edge_{col}"] = edge_row[col]
+                    record[_edge_output_name(col)] = edge_row[col]
 
                 for col in zone_attr_cols:
-                    record[f"zone_{col}"] = poly_row[col]
+                    record[_zone_output_name(col, record)] = poly_row[col]
 
                 results.append(record)
 
