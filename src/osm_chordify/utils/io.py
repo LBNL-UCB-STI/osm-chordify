@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 def save_geodataframe(gdf, output_path):
     """Save a GeoDataFrame, inferring the format from the file extension.
 
-    Supported formats: ``.gpkg``, ``.geojson``, ``.shp``, ``.csv``.
+    Supported formats: ``.gpkg``, ``.geojson``, ``.parquet``, ``.shp``, ``.csv``.
     For CSV output the geometry is exported as a ``geometry_wkt`` column.
 
     Parameters
@@ -31,6 +31,13 @@ def save_geodataframe(gdf, output_path):
         gdf.to_file(output_path, driver="GPKG")
     elif ext == ".geojson":
         gdf.to_file(output_path, driver="GeoJSON")
+    elif ext == ".parquet":
+        try:
+            gdf.to_parquet(output_path, index=False)
+        except ImportError as exc:
+            raise ImportError(
+                "Saving GeoParquet requires the optional 'pyarrow' dependency."
+            ) from exc
     elif ext == ".shp":
         gdf.to_file(output_path)
     elif ext == ".csv":
@@ -47,7 +54,7 @@ def save_geodataframe(gdf, output_path):
 def save_dataframe(df, output_path):
     """Save a DataFrame (or GeoDataFrame) with optional geometry handling.
 
-    For spatial formats (``.gpkg``, ``.geojson``) the DataFrame is promoted to
+    For spatial formats (``.gpkg``, ``.geojson``, ``.parquet``) the DataFrame is promoted to
     a GeoDataFrame when a ``geometry`` column is present.  For ``.csv`` the
     geometry is exported as WKT and dropped.
 
@@ -64,11 +71,20 @@ def save_dataframe(df, output_path):
 
     ext = os.path.splitext(output_path)[1].lower()
 
-    if ext in (".gpkg", ".geojson"):
+    if ext in (".gpkg", ".geojson", ".parquet"):
         if not isinstance(df, gpd.GeoDataFrame) and "geometry" in df.columns:
             df = gpd.GeoDataFrame(df, geometry="geometry")
-        driver = "GPKG" if ext == ".gpkg" else "GeoJSON"
-        df.to_file(output_path, driver=driver)
+        if ext == ".gpkg":
+            df.to_file(output_path, driver="GPKG")
+        elif ext == ".geojson":
+            df.to_file(output_path, driver="GeoJSON")
+        else:
+            try:
+                df.to_parquet(output_path, index=False)
+            except ImportError as exc:
+                raise ImportError(
+                    "Saving GeoParquet requires the optional 'pyarrow' dependency."
+                ) from exc
     elif ext == ".csv":
         df = df.copy()
         if "geometry" in df.columns:

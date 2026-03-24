@@ -48,7 +48,7 @@ zone_polygon_path = f"{work_dir}/inmap/ISRM/isrm_polygon.shp"
 
 out_dir = f"{work_dir}/polygon-{osm_name}"
 os.makedirs(out_dir, exist_ok=True)
-intersection_path = f"{out_dir}/polygon-{osm_name}.geojson"
+intersection_path = f"{out_dir}/polygon-{osm_name}.parquet"
 
 if not os.path.exists(intersection_path):
     intersect_road_network_with_zones(
@@ -62,7 +62,7 @@ if not os.path.exists(intersection_path):
 # --- Step 2: Map a BEAM network to the intersection ---
 
 net_csv = f"{osm_dir}/network.csv.gz"
-mapping_output = f"{out_dir}/polygon-network-mapping.geojson"
+mapping_output = f"{out_dir}/polygon-network-mapping.parquet"
 
 if not os.path.exists(mapping_output):
     map_osm_with_beam_network(

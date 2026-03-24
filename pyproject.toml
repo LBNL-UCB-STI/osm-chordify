@@ -16,6 +16,7 @@ dependencies = [
     "osmnx",
     "osmium",
     "pandas",
+    "pyarrow",
     "pyproj",
     "shapely",
     "tqdm",

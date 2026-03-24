@@ -206,7 +206,7 @@ def test_main_module_exposes_map_pbf_help():
     )
     assert "--network-csv-path" in result.stdout
     assert "--osm-pbf-path" in result.stdout
-    assert "--output-geojson-path" in result.stdout
+    assert "--output-path" in result.stdout
 
 
 def test_diagnose_osm_pbf_runs_as_a_script_without_executing_diagnostics(tmp_path):

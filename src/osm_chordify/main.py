@@ -170,22 +170,22 @@ def map_osm_with_beam_network(
 def map_network_csv_to_osm_pbf(
     network_csv_path,
     osm_pbf_path,
-    output_geojson_path,
+    output_path,
     network_osm_id_col="attributeOrigId",
 ):
-    """Map a network CSV/CSV.GZ to an OSM PBF and save a GeoJSON join."""
+    """Map a network CSV/CSV.GZ to an OSM PBF and save a spatial join."""
     if not str(osm_pbf_path).lower().endswith(".pbf"):
         raise ValueError(
             f"osm_pbf_path must point to a .pbf/.osm.pbf file, got: {osm_pbf_path}"
         )
-    if not str(output_geojson_path).lower().endswith(".geojson"):
-        raise ValueError("output_geojson_path must end with .geojson")
+    if os.path.splitext(str(output_path))[1].lower() not in {".parquet", ".gpkg", ".geojson"}:
+        raise ValueError("output_path must end with .parquet, .gpkg, or .geojson")
 
     return map_osm_with_beam_network(
         osm_path=osm_pbf_path,
         network_path=network_csv_path,
         network_osm_id_col=network_osm_id_col,
-        output_path=output_geojson_path,
+        output_path=output_path,
     )
 
 
@@ -730,7 +730,6 @@ def _build_arg_parser():
     intersect_parser.add_argument("--road-network-epsg", required=True, type=int)
     intersect_parser.add_argument("--zones", required=True)
     intersect_parser.add_argument("--output-path", required=True)
-    intersect_parser.add_argument("--proportional-cols", nargs="*")
     intersect_parser.add_argument("--output-epsg", type=int)
 
     map_parser = subparsers.add_parser(
@@ -774,11 +773,11 @@ def _build_arg_parser():
 
     map_pbf_parser = subparsers.add_parser(
         "map-pbf",
-        help="Map a network CSV/CSV.GZ to an OSM PBF and save a GeoJSON join.",
+        help="Map a network CSV/CSV.GZ to an OSM PBF and save a spatial join.",
     )
     map_pbf_parser.add_argument("--network-csv-path", required=True)
     map_pbf_parser.add_argument("--osm-pbf-path", required=True)
-    map_pbf_parser.add_argument("--output-geojson-path", required=True)
+    map_pbf_parser.add_argument("--output-path", required=True)
     map_pbf_parser.add_argument("--network-osm-id-col", default="attributeOrigId")
 
     return parser
@@ -803,7 +802,6 @@ def _run_cli(args):
             road_network=args.road_network,
             road_network_epsg=args.road_network_epsg,
             zones=args.zones,
-            proportional_cols=args.proportional_cols,
             output_path=args.output_path,
             output_epsg=args.output_epsg,
         )
@@ -844,7 +842,7 @@ def _run_cli(args):
         return map_network_csv_to_osm_pbf(
             network_csv_path=args.network_csv_path,
             osm_pbf_path=args.osm_pbf_path,
-            output_geojson_path=args.output_geojson_path,
+            output_path=args.output_path,
             network_osm_id_col=args.network_osm_id_col,
         )
 

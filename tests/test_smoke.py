@@ -1,5 +1,10 @@
+import importlib.util
 import tomllib
 from pathlib import Path
+
+import geopandas as gpd
+import pandas as pd
+from shapely.geometry import LineString
 
 from osm_chordify import (
     build_osm_by_pop_density,
@@ -55,3 +60,30 @@ def test_name_osm_network():
     layers_ferry = {**layers, "ferry": {"geo_level": "county"}}
     name_ferry = name_osm_network("seattle", layers_ferry, False)
     assert "-ferry-" in name_ferry
+
+
+def test_save_helpers_support_parquet(tmp_path):
+    if importlib.util.find_spec("pyarrow") is None:
+        return
+
+    geodf = gpd.GeoDataFrame(
+        {
+            "osm_id": [1],
+            "value": [2.5],
+            "geometry": [LineString([(0, 0), (1, 1)])],
+        },
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+
+    geo_path = tmp_path / "edges.parquet"
+    save_geodataframe(geodf, geo_path)
+    loaded_geo = gpd.read_parquet(geo_path)
+    assert len(loaded_geo) == 1
+    assert "geometry" in loaded_geo.columns
+
+    df_path = tmp_path / "mapping.parquet"
+    save_dataframe(pd.DataFrame(geodf), df_path)
+    loaded_df = gpd.read_parquet(df_path)
+    assert len(loaded_df) == 1
+    assert "geometry" in loaded_df.columns
