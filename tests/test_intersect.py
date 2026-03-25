@@ -1,4 +1,5 @@
 import geopandas as gpd
+import pandas as pd
 import pytest
 from shapely.geometry import LineString, Point, Polygon
 
@@ -217,9 +218,9 @@ def test_bbox_prefilter_keeps_voided_rows_for_bbox_cells_without_link_pieces():
 
     assert set(result["zone_zone_id"]) == {"hit", "voided"}
     voided = result[result["zone_zone_id"] == "voided"].iloc[0]
-    assert voided["zone_edge_proportion"] == "voided"
-    assert voided["edge_link_length_m"] == "voided"
-    assert voided["zone_link_length_m"] == "voided"
+    assert pd.isna(voided["zone_edge_proportion"])
+    assert pd.isna(voided["edge_link_length_m"])
+    assert pd.isna(voided["zone_link_length_m"])
 
 
 def _make_edges():

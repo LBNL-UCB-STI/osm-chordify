@@ -148,7 +148,8 @@ When enabled, `osm-chordify` logs an informative filtering message and shows a
 dedicated `Filtering zones` progress bar before the exact-intersection stage.
 Set `prefilter_zones_to_network_bbox=False` to skip the prefilter entirely.
 Zones that survive the bbox prefilter but contain no intersecting link pieces
-are retained as `voided` rows instead of being dropped.
+are retained instead of being dropped; the fixed numeric intersection columns
+remain null for those rows.
 
 `area_name` only controls the cached boundary filename; the actual county
 selection comes from `state_fips_code` and `county_fips_codes`. County

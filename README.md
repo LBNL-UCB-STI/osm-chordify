@@ -83,8 +83,8 @@ intersection:
 
 This reduces the zone set before exact intersection and shows a dedicated
 `Filtering zones` progress bar. Zones kept by the bounding-box prefilter that
-still contain no intersecting link pieces are preserved as `voided` rows
-instead of being dropped.
+still contain no intersecting link pieces are preserved instead of being
+dropped; the fixed numeric intersection columns remain null for those rows.
 
 Networks can be exported as GraphML, PKL, GPKG, OSM XML, OSM PBF, and GeoJSON.
 

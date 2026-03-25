@@ -265,16 +265,16 @@ def _build_void_rows(zones, edge_attr_cols, zone_attr_cols, crs):
     """Build placeholder rows for kept zones with no intersecting link pieces."""
     result_cols = ["zone_edge_proportion", "edge_link_length_m", "zone_link_length_m", "geometry"]
     result_data = {
-        "zone_edge_proportion": ["voided"] * len(zones),
-        "edge_link_length_m": ["voided"] * len(zones),
-        "zone_link_length_m": ["voided"] * len(zones),
+        "zone_edge_proportion": [pd.NA] * len(zones),
+        "edge_link_length_m": [pd.NA] * len(zones),
+        "zone_link_length_m": [pd.NA] * len(zones),
         "geometry": [GeometryCollection() for _ in range(len(zones))],
     }
 
     existing_keys = set(result_cols)
     for col in edge_attr_cols:
         out_col = _edge_output_name(col)
-        result_data[out_col] = ["voided"] * len(zones)
+        result_data[out_col] = [pd.NA] * len(zones)
         if out_col not in result_cols:
             result_cols.append(out_col)
             existing_keys.add(out_col)
