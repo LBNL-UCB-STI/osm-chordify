@@ -450,7 +450,7 @@ def intersect_road_network_with_zones(
             desc="Computing intersections",
             unit="pair",
             dynamic_ncols=True,
-            leave=False,
+            leave=True,
             mininterval=0.5,
         ) as pbar:
             for start in range(0, len(matched), INTERSECTION_CHUNK_SIZE):
