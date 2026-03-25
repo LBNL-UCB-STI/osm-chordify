@@ -114,6 +114,10 @@ result = intersect_road_network_with_county_zones(
 )
 ```
 
+`road_network_epsg` must be a projected CRS. Intersections now reject
+geographic CRSs such as `4326`, because the fixed length outputs are defined in
+meters.
+
 The returned output always includes:
 
 - `zone_edge_proportion`
@@ -127,7 +131,10 @@ Older carried attributes remain available through the prefixed `edge_...` /
 `zone_...` columns.
 
 `area_name` only controls the cached boundary filename; the actual county
-selection comes from `state_fips_code` and `county_fips_codes`.
+selection comes from `state_fips_code` and `county_fips_codes`. County
+boundaries are cached in the requested intersection CRS, so
+`road_network_epsg=26910` writes an `..._epsg26910.geojson` cache instead of
+always materializing WGS84 first.
 
 ## Project structure
 

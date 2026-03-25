@@ -79,6 +79,34 @@ def test_intersection_always_includes_length_columns():
     assert result.iloc[0]["zone_link_length_m"] == pytest.approx(5.0, abs=1e-6)
 
 
+def test_intersection_rejects_geographic_working_crs():
+    edges = gpd.GeoDataFrame(
+        {
+            "osm_id": [1],
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [LineString([(-122.0, 37.0), (-121.99, 37.0)])],
+        },
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["A"],
+            "geometry": [Polygon([(-122.0, 36.99), (-121.995, 36.99), (-121.995, 37.01), (-122.0, 37.01)])],
+        },
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+
+    with pytest.raises(ValueError, match="geographic"):
+        intersect_road_network_with_zones(
+            road_network=edges,
+            road_network_epsg=4326,
+            zones=zones,
+        )
+
+
 def _make_edges():
     return gpd.GeoDataFrame(
         {
@@ -217,6 +245,7 @@ def test_intersect_road_network_with_county_zones_uses_fips_boundary_fetch(monke
     assert calls["kwargs"]["state_fips_code"] == "06"
     assert calls["kwargs"]["county_fips_codes"] == ["001"]
     assert calls["kwargs"]["geo_level"] == "county"
+    assert calls["kwargs"]["target_epsg"] == 3857
     assert len(result) == 1
     assert result.iloc[0]["zone_GEOID"] == "06001"
 

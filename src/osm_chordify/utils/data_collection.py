@@ -5,8 +5,18 @@ import os
 
 import geopandas as gpd
 import pandas as pd
+from pyproj import CRS
 
 logger = logging.getLogger(__name__)
+
+
+def _project_if_needed(gdf, target_epsg):
+    """Project a GeoDataFrame only when its CRS differs from the target EPSG."""
+    if gdf.crs is not None:
+        current_epsg = gdf.crs.to_epsg()
+        if current_epsg == int(target_epsg):
+            return gdf
+    return gdf.to_crs(epsg=target_epsg)
 
 
 def collect_census_data(state_fips_code, county_fips_codes, year, census_data_file, geo_level='county', census_api_key=None):
@@ -156,7 +166,15 @@ def collect_tract_boundaries(state_fips_code, county_fips_codes, year):
         raise
     return geo_data
 
-def collect_geographic_boundaries(state_fips_code, county_fips_codes, year, area_name, geo_level, work_dir):
+def collect_geographic_boundaries(
+    state_fips_code,
+    county_fips_codes,
+    year,
+    area_name,
+    geo_level,
+    work_dir,
+    target_epsg=4326,
+):
     """Collect geographic boundaries at the specified level, caching to GeoJSON.
 
     Parameters
@@ -173,15 +191,20 @@ def collect_geographic_boundaries(state_fips_code, county_fips_codes, year, area
         Geographic level: ``'county'``, ``'cbg'``, ``'tract'``, or ``'taz'``.
     work_dir : str
         Directory where the cached GeoJSON file will be stored.
+    target_epsg : int, optional
+        EPSG code for the cached/output boundary CRS. Defaults to ``4326``.
 
     Returns
     -------
     geopandas.GeoDataFrame
-        Boundaries in WGS 84 (EPSG:4326).
+        Boundaries in the requested CRS.
     """
-    study_area_boundary_geo_path = f"{work_dir}/{area_name}_{geo_level}_{year}_wgs84.geojson"
+    CRS.from_user_input(target_epsg)
+    crs_suffix = "wgs84" if int(target_epsg) == 4326 else f"epsg{int(target_epsg)}"
+    study_area_boundary_geo_path = f"{work_dir}/{area_name}_{geo_level}_{year}_{crs_suffix}.geojson"
     if os.path.exists(study_area_boundary_geo_path):
-        return gpd.read_file(study_area_boundary_geo_path)
+        cached_geo = gpd.read_file(study_area_boundary_geo_path)
+        return _project_if_needed(cached_geo, target_epsg)
     else:
         os.makedirs(os.path.dirname(study_area_boundary_geo_path), exist_ok=True)
         from pygris import counties, block_groups
@@ -203,9 +226,9 @@ def collect_geographic_boundaries(state_fips_code, county_fips_codes, year, area
         mask = geo_data[countyfp_columns].apply(lambda x: x.isin(county_fips_codes)).any(axis=1)
         selected_geo = geo_data[mask]
 
-        selected_geo_wgs84 = selected_geo.to_crs(epsg=4326)
-        selected_geo_wgs84.to_file(study_area_boundary_geo_path, driver="GeoJSON")
-        return selected_geo_wgs84
+        selected_geo_projected = _project_if_needed(selected_geo, target_epsg)
+        selected_geo_projected.to_file(study_area_boundary_geo_path, driver="GeoJSON")
+        return selected_geo_projected
 
 def collect_taz_boundaries(state_fips_code, year, output_dir):
     """Download and read TAZ boundaries from a TIGER/Line shapefile ZIP.

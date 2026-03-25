@@ -321,6 +321,7 @@ def intersect_road_network_with_county_zones(
         area_name=area_name,
         geo_level="county",
         work_dir=work_dir,
+        target_epsg=road_network_epsg,
     )
 
     return intersect_road_network_with_zones(

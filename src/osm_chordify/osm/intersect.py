@@ -13,6 +13,7 @@ import warnings
 
 import geopandas as gpd
 import pandas as pd
+from pyproj import CRS
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,17 @@ def _project_if_needed(gdf, epsg):
 def _is_geographic_crs(crs):
     """Return True when the CRS is geographic (degrees), else False."""
     return crs is not None and getattr(crs, "is_geographic", False)
+
+
+def _require_projected_epsg(epsg):
+    """Validate that the working intersection CRS is projected."""
+    crs = CRS.from_user_input(epsg)
+    if crs.is_geographic:
+        raise ValueError(
+            f"Intersection EPSG:{epsg} is geographic. "
+            "Use a projected CRS for length-based intersection outputs."
+        )
+    return crs
 
 
 def _load_saved_geodataframe(path):
@@ -330,6 +342,7 @@ def intersect_road_network_with_zones(
         attributes (prefixed ``zone_``), plus ``zone_edge_proportion``,
         ``edge_link_length_m``, ``zone_link_length_m``, and ``geometry``.
     """
+    _require_projected_epsg(road_network_epsg)
     edges_gdf = _load_edges(road_network)
     polygons_gdf = _load_zones(zones)
 
@@ -350,13 +363,6 @@ def intersect_road_network_with_zones(
     logger.info("Projecting geometries to EPSG:%d", road_network_epsg)
     edges_proj = _project_if_needed(edges_gdf, road_network_epsg)
     polys_proj = _project_if_needed(polygons_gdf, road_network_epsg)
-
-    if _is_geographic_crs(edges_proj.crs):
-        logger.warning(
-            "Intersection CRS EPSG:%d is geographic; length-based outputs will be in degree-based units rather than meters. "
-            "Use a projected CRS for defensible length calculations.",
-            road_network_epsg,
-        )
 
     edge_attr_cols = [c for c in edges_gdf.columns if c != "geometry"]
     zone_attr_cols = [c for c in polygons_gdf.columns if c != "geometry"]
