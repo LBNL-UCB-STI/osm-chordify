@@ -130,6 +130,24 @@ latest output's top-level fixed columns are recomputed for that latest step.
 Older carried attributes remain available through the prefixed `edge_...` /
 `zone_...` columns.
 
+For dense grids, `intersect_road_network_with_zones(...)` and the county helper
+can optionally prefilter zones against a buffered road-network corridor before
+the exact intersection stage:
+
+```python
+result = intersect_road_network_with_zones(
+    road_network="./output/network/network.gpkg",
+    road_network_epsg=26910,
+    zones="./output/grid/isrm_polygon.shp",
+    road_buffer_filter_m=100.0,
+    output_path="./output/grid/network-grid-intersection.parquet",
+)
+```
+
+When enabled, `osm-chordify` logs an informative filtering message and shows a
+dedicated `Filtering zones` progress bar before the exact-intersection stage.
+Set `road_buffer_filter_m=None` to skip the prefilter entirely.
+
 `area_name` only controls the cached boundary filename; the actual county
 selection comes from `state_fips_code` and `county_fips_codes`. County
 boundaries are cached in the requested intersection CRS, so

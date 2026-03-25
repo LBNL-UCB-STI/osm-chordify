@@ -69,6 +69,16 @@ Intersection outputs always include:
 
 These three columns always describe the latest intersection step. In chained intersections, earlier prefixed `edge_...` / `zone_...` fields are carried forward, but the top-level fixed columns are recomputed for the current step.
 
+For dense grids, `intersect_road_network_with_zones(...)` can optionally
+prefilter zones against a buffered road-network corridor before exact
+intersection:
+
+- `road_buffer_filter_m=None` disables the prefilter
+- `road_buffer_filter_m=100.0` enables a 100 m buffered-road prefilter
+
+This drops cells outside the buffered corridor first and shows a dedicated
+`Filtering zones` progress bar before the exact-intersection progress bar.
+
 Networks can be exported as GraphML, PKL, GPKG, OSM XML, OSM PBF, and GeoJSON.
 
 You can also run the main workflows via CLI:

@@ -275,6 +275,7 @@ def intersect_road_network_with_county_zones(
     area_name="study_area",
     output_path=None,
     output_epsg=None,
+    road_buffer_filter_m=None,
 ):
     """Intersect a road network with county polygons identified by FIPS codes.
 
@@ -302,6 +303,9 @@ def intersect_road_network_with_county_zones(
         If provided, save the result to this file.
     output_epsg : int, optional
         EPSG code for the output CRS. Defaults to *road_network_epsg*.
+    road_buffer_filter_m : float, optional
+        If provided, buffer the road network by this many meters and drop
+        counties outside that corridor before exact intersection.
 
     Returns
     -------
@@ -330,6 +334,7 @@ def intersect_road_network_with_county_zones(
         zones=county_zones,
         output_path=output_path,
         output_epsg=output_epsg,
+        road_buffer_filter_m=road_buffer_filter_m,
     )
 
 
@@ -799,6 +804,7 @@ def _build_arg_parser():
     intersect_parser.add_argument("--zones", required=True)
     intersect_parser.add_argument("--output-path", required=True)
     intersect_parser.add_argument("--output-epsg", type=int)
+    intersect_parser.add_argument("--road-buffer-filter-m", type=float)
 
     map_parser = subparsers.add_parser(
         "map",
@@ -872,6 +878,7 @@ def _run_cli(args):
             zones=args.zones,
             output_path=args.output_path,
             output_epsg=args.output_epsg,
+            road_buffer_filter_m=args.road_buffer_filter_m,
         )
 
     if args.command == "map":

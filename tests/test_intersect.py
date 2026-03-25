@@ -107,6 +107,51 @@ def test_intersection_rejects_geographic_working_crs():
         )
 
 
+def test_intersection_can_prefilter_zones_with_buffer(monkeypatch):
+    edges = gpd.GeoDataFrame(
+        {
+            "osm_id": [1],
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [LineString([(0, 0), (10, 0)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["A"],
+            "geometry": [Polygon([(0, -1), (5, -1), (5, 1), (0, 1)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    calls = {}
+    original = __import__("osm_chordify.osm.intersect", fromlist=["_prefilter_zones_against_buffer"])._prefilter_zones_against_buffer
+
+    def _wrapped_prefilter(polys_proj, edges_proj, road_buffer_filter_m):
+        calls["count"] = calls.get("count", 0) + 1
+        calls["road_buffer_filter_m"] = road_buffer_filter_m
+        return original(polys_proj, edges_proj, road_buffer_filter_m)
+
+    monkeypatch.setattr(
+        "osm_chordify.osm.intersect._prefilter_zones_against_buffer",
+        _wrapped_prefilter,
+    )
+
+    result = intersect_road_network_with_zones(
+        road_network=edges,
+        road_network_epsg=3857,
+        zones=zones,
+        road_buffer_filter_m=25.0,
+    )
+
+    assert len(result) == 1
+    assert calls["count"] == 1
+    assert calls["road_buffer_filter_m"] == 25.0
+
+
 def _make_edges():
     return gpd.GeoDataFrame(
         {

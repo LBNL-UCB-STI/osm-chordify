@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 LINE_GEOMETRY_TYPES = {"LineString", "MultiLineString"}
 INTERSECTION_CHUNK_SIZE = 50000
+ZONE_FILTER_CHUNK_SIZE = 10000
 
 
 def load_osm_edges(osm_gpkg_path):
@@ -163,6 +164,7 @@ def _intersection_cache_metadata(
     road_network_epsg,
     zones,
     output_epsg,
+    road_buffer_filter_m,
 ):
     """Return metadata used to validate a reusable intersection cache."""
     return {
@@ -170,7 +172,8 @@ def _intersection_cache_metadata(
         "road_network_epsg": road_network_epsg,
         "zones": _fingerprint_source(zones),
         "output_epsg": output_epsg,
-        "schema_version": 1,
+        "road_buffer_filter_m": road_buffer_filter_m,
+        "schema_version": 2,
     }
 
 
@@ -298,12 +301,59 @@ def _is_county_like_zones(polys_proj):
     )
 
 
+def _prefilter_zones_against_buffer(polys_proj, edges_proj, road_buffer_filter_m):
+    """Filter out zones that do not intersect a buffered road-network corridor."""
+    if road_buffer_filter_m is None or road_buffer_filter_m <= 0:
+        raise ValueError(
+            "road_buffer_filter_m must be positive when buffered zone prefiltering is enabled."
+        )
+
+    logger.info(
+        "Filtering %d zones against a %.2fm buffered road-network corridor before exact intersection",
+        len(polys_proj),
+        road_buffer_filter_m,
+    )
+    network_union = (
+        edges_proj.geometry.union_all()
+        if hasattr(edges_proj.geometry, "union_all")
+        else edges_proj.geometry.unary_union
+    )
+    buffered_network = network_union.buffer(road_buffer_filter_m)
+
+    keep_masks = []
+    with tqdm(
+        total=len(polys_proj),
+        desc="Filtering zones",
+        unit="zone",
+        dynamic_ncols=True,
+        leave=True,
+        mininterval=0.5,
+    ) as pbar:
+        for start in range(0, len(polys_proj), ZONE_FILTER_CHUNK_SIZE):
+            chunk = polys_proj.iloc[start:start + ZONE_FILTER_CHUNK_SIZE]
+            keep_mask = chunk.geometry.intersects(buffered_network)
+            keep_masks.append(keep_mask)
+            pbar.update(len(chunk))
+            kept = sum(mask.sum() for mask in keep_masks)
+            pbar.set_postfix_str(f"kept={kept}, dropped={pbar.n - kept}")
+
+    combined_mask = pd.concat(keep_masks).reindex(polys_proj.index, fill_value=False)
+    filtered = polys_proj.loc[combined_mask].copy()
+    logger.info(
+        "Zone prefilter kept %d/%d zones after buffered-road screening",
+        len(filtered),
+        len(polys_proj),
+    )
+    return filtered
+
+
 def intersect_road_network_with_zones(
     road_network,
     road_network_epsg,
     zones,
     output_path=None,
     output_epsg=None,
+    road_buffer_filter_m=None,
 ):
     """Intersect road-network edges with zone polygons.
 
@@ -333,6 +383,10 @@ def intersect_road_network_with_zones(
     output_epsg : int, optional
         EPSG code for the output CRS.  Defaults to *road_network_epsg*
         if not provided.
+    road_buffer_filter_m : float, optional
+        If provided, buffer the road network by this many meters and drop
+        zones that do not intersect that corridor before exact intersection.
+        ``None`` disables the prefilter.
 
     Returns
     -------
@@ -354,6 +408,7 @@ def intersect_road_network_with_zones(
         road_network_epsg=road_network_epsg,
         zones=zones,
         output_epsg=output_epsg,
+        road_buffer_filter_m=road_buffer_filter_m,
     )
     cached_result = _try_load_cached_intersection(output_path, cache_metadata)
     if cached_result is not None:
@@ -363,6 +418,9 @@ def intersect_road_network_with_zones(
     logger.info("Projecting geometries to EPSG:%d", road_network_epsg)
     edges_proj = _project_if_needed(edges_gdf, road_network_epsg)
     polys_proj = _project_if_needed(polygons_gdf, road_network_epsg)
+
+    if road_buffer_filter_m is not None and len(polys_proj):
+        polys_proj = _prefilter_zones_against_buffer(polys_proj, edges_proj, road_buffer_filter_m)
 
     edge_attr_cols = [c for c in edges_gdf.columns if c != "geometry"]
     zone_attr_cols = [c for c in polygons_gdf.columns if c != "geometry"]
