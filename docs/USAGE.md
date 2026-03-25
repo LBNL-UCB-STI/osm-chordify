@@ -157,6 +157,51 @@ boundaries are cached in the requested intersection CRS, so
 `road_network_epsg=26910` writes an `..._epsg26910.geojson` cache instead of
 always materializing WGS84 first.
 
+## County-based masks
+
+Use `build_area_mask_from_counties(...)` to generate either:
+
+- a land mask:
+  - `include_water=False`
+  - uses shoreline-clipped cartographic county boundaries
+  - fuses counties without taking a convex hull
+  - `buffer_m` is applied to that non-convex land geometry
+- a whole-area mask:
+  - `include_water=True`
+  - uses full TIGER/Line county boundaries
+  - takes the convex hull of the fused counties
+  - `buffer_m` is applied to that convex whole-area geometry
+
+Example:
+
+```python
+from osm_chordify import build_area_mask_from_counties
+
+land_mask = build_area_mask_from_counties(
+    state_fips_code="06",
+    county_fips_codes=["001", "013", "041", "055", "075", "081", "085", "095", "097"],
+    year=2020,
+    work_dir="./output/geo",
+    area_name="sfbay",
+    output_epsg=26910,
+    include_water=False,
+    buffer_m=1000,
+    output_path="./output/geo/sfbay_land_mask.geojson",
+)
+
+whole_area_mask = build_area_mask_from_counties(
+    state_fips_code="06",
+    county_fips_codes=["001", "013", "041", "055", "075", "081", "085", "095", "097"],
+    year=2020,
+    work_dir="./output/geo",
+    area_name="sfbay",
+    output_epsg=26910,
+    include_water=True,
+    buffer_m=1000,
+    output_path="./output/geo/sfbay_whole_area_mask.geojson",
+)
+```
+
 ## Project structure
 
 ```text

@@ -326,6 +326,7 @@ def intersect_road_network_with_county_zones(
         geo_level="county",
         work_dir=work_dir,
         target_epsg=road_network_epsg,
+        cartographic=True,
     )
 
     return intersect_road_network_with_zones(
@@ -336,6 +337,91 @@ def intersect_road_network_with_county_zones(
         output_epsg=output_epsg,
         prefilter_zones_to_network_bbox=prefilter_zones_to_network_bbox,
     )
+
+
+def build_area_mask_from_counties(
+    state_fips_code,
+    county_fips_codes,
+    year,
+    work_dir,
+    area_name="study_area",
+    output_epsg=4326,
+    include_water=False,
+    buffer_m=0.0,
+    output_path=None,
+):
+    """Build a fused area mask from county FIPS codes.
+
+    Parameters
+    ----------
+    state_fips_code : str
+        State FIPS code.
+    county_fips_codes : list[str] or str
+        County FIPS code(s) within the state.
+    year : int
+        Boundary reference year.
+    work_dir : str
+        Directory used for cached county boundary files.
+    area_name : str, optional
+        Label used in the cached boundary filename.
+    output_epsg : int, optional
+        EPSG code for the output mask CRS.
+    include_water : bool, optional
+        If ``True``, create a whole-area mask using the convex hull of the
+        fused counties, optionally buffered by ``buffer_m``. If ``False``,
+        create a land-only mask from the fused county polygons, optionally
+        buffered without taking a convex hull.
+    buffer_m : float, optional
+        Buffer in meters applied after fusion. For ``include_water=True`` this
+        buffers the convex hull; for ``False`` it buffers the fused county
+        union directly.
+    output_path : str, optional
+        If provided, save the resulting mask to this file.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Single-row GeoDataFrame containing the fused mask geometry.
+    """
+    from osm_chordify.utils.data_collection import collect_geographic_boundaries
+    from osm_chordify.utils.geo import build_area_mask_geometry
+    from osm_chordify.utils.io import save_geodataframe
+
+    if isinstance(county_fips_codes, str):
+        county_fips_codes = [county_fips_codes]
+    if buffer_m < 0:
+        raise ValueError("buffer_m must be non-negative")
+
+    counties = collect_geographic_boundaries(
+        state_fips_code=state_fips_code,
+        county_fips_codes=county_fips_codes,
+        year=year,
+        area_name=area_name,
+        geo_level="county",
+        work_dir=work_dir,
+        target_epsg=output_epsg,
+        cartographic=not include_water,
+    )
+    mask_geom = build_area_mask_geometry(
+        counties,
+        include_water=include_water,
+        buffer_m=buffer_m,
+        buffer_epsg=output_epsg,
+    )
+
+    mask_gdf = gpd.GeoDataFrame(
+        {
+            "mask_name": [area_name],
+            "include_water": [include_water],
+            "buffer_m": [buffer_m],
+            "geometry": [mask_geom],
+        },
+        geometry="geometry",
+        crs=f"EPSG:{output_epsg}",
+    )
+    if output_path:
+        save_geodataframe(mask_gdf, output_path)
+    return mask_gdf
 
 
 # ---------------------------------------------------------------------------

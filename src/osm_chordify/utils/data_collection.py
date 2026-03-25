@@ -174,6 +174,7 @@ def collect_geographic_boundaries(
     geo_level,
     work_dir,
     target_epsg=4326,
+    cartographic=False,
 ):
     """Collect geographic boundaries at the specified level, caching to GeoJSON.
 
@@ -193,6 +194,10 @@ def collect_geographic_boundaries(
         Directory where the cached GeoJSON file will be stored.
     target_epsg : int, optional
         EPSG code for the cached/output boundary CRS. Defaults to ``4326``.
+    cartographic : bool, optional
+        If ``True`` and ``geo_level='county'``, use generalized cartographic
+        boundary files (`cb=True`). If ``False``, use full TIGER/Line county
+        boundaries.
 
     Returns
     -------
@@ -201,7 +206,8 @@ def collect_geographic_boundaries(
     """
     CRS.from_user_input(target_epsg)
     crs_suffix = "wgs84" if int(target_epsg) == 4326 else f"epsg{int(target_epsg)}"
-    study_area_boundary_geo_path = f"{work_dir}/{area_name}_{geo_level}_{year}_{crs_suffix}.geojson"
+    boundary_suffix = "cb" if cartographic else "tiger"
+    study_area_boundary_geo_path = f"{work_dir}/{area_name}_{geo_level}_{year}_{boundary_suffix}_{crs_suffix}.geojson"
     if os.path.exists(study_area_boundary_geo_path):
         cached_geo = gpd.read_file(study_area_boundary_geo_path)
         return _project_if_needed(cached_geo, target_epsg)
@@ -210,9 +216,7 @@ def collect_geographic_boundaries(
         from pygris import counties, block_groups
 
         if geo_level == 'county':
-            # Use full TIGER/Line county boundaries so water-spanning assets
-            # such as bridges are not clipped away at the shoreline.
-            geo_data = counties(state=state_fips_code, year=year, cb=False, cache=True)
+            geo_data = counties(state=state_fips_code, year=year, cb=cartographic, cache=True)
         elif geo_level == 'cbg':
             # Define fips code for selected counties
             geo_data = block_groups(state=state_fips_code, year=year, cb=True, cache=True)

@@ -150,6 +150,57 @@ def to_convex_hull(input_data, utm_epsg, buffer_in_meters):
     return buffered_convex_hull
 
 
+def build_area_mask_geometry(input_data, include_water=False, buffer_m=0.0, buffer_epsg=None):
+    """Build a fused area mask geometry from geographic inputs.
+
+    Parameters
+    ----------
+    input_data : GeoDataFrame, GeoSeries, or Shapely geometry
+        Geographic input used to build the mask.
+    include_water : bool, optional
+        If True, use the convex hull of the fused input geometry (whole-area
+        mask). If False, use the fused geometry directly (land-only mask).
+    buffer_m : float, optional
+        Buffer distance in meters applied after fusion/convex hull.
+    buffer_epsg : int, optional
+        Projected EPSG used to apply meter-based buffers when the input CRS is
+        geographic. Required for geographic inputs if ``buffer_m`` is nonzero.
+
+    Returns
+    -------
+    Shapely geometry
+        Mask geometry.
+    """
+    if isinstance(input_data, gpd.GeoDataFrame):
+        crs = input_data.crs
+        base_geom = input_data.geometry.union_all() if hasattr(input_data.geometry, "union_all") else input_data.geometry.unary_union
+    elif isinstance(input_data, gpd.GeoSeries):
+        crs = input_data.crs
+        base_geom = input_data.union_all() if hasattr(input_data, "union_all") else input_data.unary_union
+    elif hasattr(input_data, "geom_type"):
+        crs = None
+        base_geom = input_data
+    else:
+        raise TypeError("Input must be a GeoDataFrame, GeoSeries, or Shapely geometry")
+
+    mask_geom = base_geom.convex_hull if include_water else base_geom
+    if not buffer_m:
+        return mask_geom
+
+    if crs is not None and not getattr(crs, "is_geographic", False):
+        return mask_geom.buffer(buffer_m)
+
+    if buffer_epsg is None:
+        raise ValueError("buffer_epsg is required for meter-based buffering of geographic inputs")
+
+    if crs is None:
+        raise ValueError("Cannot apply meter-based buffering to a bare geometry without CRS information")
+
+    mask_series = gpd.GeoSeries([mask_geom], crs=crs).to_crs(epsg=buffer_epsg)
+    buffered = mask_series.buffer(buffer_m)
+    return buffered.to_crs(crs).iloc[0]
+
+
 def project_graph(G: nx.MultiDiGraph, to_crs=None, to_latlong=False) -> nx.MultiDiGraph:
     """
     Project a graph from its current CRS to another.

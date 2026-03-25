@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import LineString, Point, Polygon
 
-from osm_chordify.main import intersect_road_network_with_county_zones
+from osm_chordify.main import build_area_mask_from_counties, intersect_road_network_with_county_zones
 from osm_chordify.osm.intersect import intersect_road_network_with_zones
 
 
@@ -362,8 +362,85 @@ def test_intersect_road_network_with_county_zones_uses_fips_boundary_fetch(monke
     assert calls["kwargs"]["county_fips_codes"] == ["001"]
     assert calls["kwargs"]["geo_level"] == "county"
     assert calls["kwargs"]["target_epsg"] == 3857
+    assert calls["kwargs"]["cartographic"] is True
     assert len(result) == 1
     assert result.iloc[0]["zone_GEOID"] == "06001"
+
+
+def test_build_area_mask_from_counties_land_only_preserves_gap(monkeypatch):
+    counties = gpd.GeoDataFrame(
+        {
+            "GEOID": ["06001", "06013"],
+            "geometry": [
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(3, 0), (4, 0), (4, 1), (3, 1)]),
+            ],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    calls = {}
+
+    def _fake_collect_geographic_boundaries(**kwargs):
+        calls["kwargs"] = kwargs
+        return counties
+
+    monkeypatch.setattr(
+        "osm_chordify.utils.data_collection.collect_geographic_boundaries",
+        _fake_collect_geographic_boundaries,
+    )
+
+    mask = build_area_mask_from_counties(
+        state_fips_code="06",
+        county_fips_codes=["001", "013"],
+        year=2020,
+        work_dir="/tmp/osm-chordify-test",
+        output_epsg=3857,
+        include_water=False,
+    )
+
+    assert len(mask) == 1
+    assert calls["kwargs"]["cartographic"] is True
+    assert not mask.iloc[0].geometry.contains(Point(2, 0.5))
+
+
+def test_build_area_mask_from_counties_whole_area_fills_gap(monkeypatch):
+    counties = gpd.GeoDataFrame(
+        {
+            "GEOID": ["06001", "06013"],
+            "geometry": [
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(3, 0), (4, 0), (4, 1), (3, 1)]),
+            ],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    calls = {}
+
+    def _fake_collect_geographic_boundaries(**kwargs):
+        calls["kwargs"] = kwargs
+        return counties
+
+    monkeypatch.setattr(
+        "osm_chordify.utils.data_collection.collect_geographic_boundaries",
+        _fake_collect_geographic_boundaries,
+    )
+
+    mask = build_area_mask_from_counties(
+        state_fips_code="06",
+        county_fips_codes=["001", "013"],
+        year=2020,
+        work_dir="/tmp/osm-chordify-test",
+        output_epsg=3857,
+        include_water=True,
+    )
+
+    assert len(mask) == 1
+    assert calls["kwargs"]["cartographic"] is False
+    assert mask.iloc[0].geometry.contains(Point(2, 0.5))
 
 
 def test_intersection_drops_point_only_boundary_touches():

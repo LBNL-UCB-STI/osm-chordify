@@ -4,6 +4,7 @@ from importlib import import_module
 
 __all__ = [
     "build_osm_by_pop_density",
+    "build_area_mask_from_counties",
     "create_osm_highway_filter",
     "export_network",
     "intersect_road_network_with_zones",
@@ -15,6 +16,7 @@ __all__ = [
 
 _EXPORTS = {
     "build_osm_by_pop_density": ("osm_chordify.main", "build_osm_by_pop_density"),
+    "build_area_mask_from_counties": ("osm_chordify.main", "build_area_mask_from_counties"),
     "map_osm_with_beam_network": ("osm_chordify.main", "map_osm_with_beam_network"),
     "match_road_network_geometries": ("osm_chordify.main", "match_road_network_geometries"),
     "diagnose_osm": ("osm_chordify.main", "diagnose_osm"),

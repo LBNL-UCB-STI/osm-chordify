@@ -48,6 +48,7 @@ You can also pass the key directly to the example scripts with `--census-api-key
 
 ```python
 from osm_chordify import (
+    build_area_mask_from_counties,
     build_osm_by_pop_density,
     create_osm_highway_filter,
     intersect_road_network_with_county_zones,
@@ -59,6 +60,7 @@ from osm_chordify import (
 
 Core functions:
 
+- `build_area_mask_from_counties`: build a fused county-based land mask or whole-area mask from FIPS codes
 - `build_osm_by_pop_density`: build a multi-layer OSM network from county / tract / CBG boundaries and density filters
 - `intersect_road_network_with_county_zones`: intersect a network with county polygons fetched by state/county FIPS codes
 - `intersect_road_network_with_zones`: intersect network edges with zone polygons
@@ -85,6 +87,19 @@ This reduces the zone set before exact intersection and shows a dedicated
 `Filtering zones` progress bar. Zones kept by the bounding-box prefilter that
 still contain no intersecting link pieces are preserved instead of being
 dropped; the fixed numeric intersection columns remain null for those rows.
+
+Mask generation semantics:
+
+- `include_water=False`
+  - land mask
+  - uses shoreline-clipped cartographic county boundaries
+  - fuses counties without taking a convex hull
+  - optional `buffer_m` is applied to that non-convex land geometry
+- `include_water=True`
+  - whole-area mask
+  - uses full TIGER/Line county boundaries
+  - takes the convex hull of the fused counties
+  - optional `buffer_m` is applied to that convex whole-area geometry
 
 Networks can be exported as GraphML, PKL, GPKG, OSM XML, OSM PBF, and GeoJSON.
 

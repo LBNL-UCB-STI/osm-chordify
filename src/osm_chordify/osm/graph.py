@@ -35,7 +35,7 @@ from osm_chordify.utils.data_collection import (
     collect_geographic_boundaries,
     filter_boundaries_by_density,
 )
-from osm_chordify.utils.geo import project_graph, to_convex_hull
+from osm_chordify.utils.geo import build_area_mask_geometry, project_graph, to_convex_hull
 
 logger = logging.getLogger(__name__)
 
@@ -802,7 +802,12 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
 
             # Configure layer-specific parameters
             if layer_role in {"main", "backbone", "connector"}:
-                graph_layer = to_convex_hull(region_boundary_wgs84, utm_epsg, buffer_in_meters)
+                graph_layer = build_area_mask_geometry(
+                    region_boundary_wgs84,
+                    include_water=True,
+                    buffer_m=buffer_in_meters,
+                    buffer_epsg=utm_epsg,
+                )
                 network_type = layer_config.get("network_type", "drive")
                 simplify = layer_config.get("simplify", False)
                 retain_all = layer_config.get("retain_all", True)
@@ -830,7 +835,12 @@ def download_and_prepare_osm_network(_network_config: dict, _area_config: dict, 
                 network_type, simplify, retain_all, truncate_by_edge = "drive", False, True, True
 
             elif layer_role == "ferry":
-                graph_layer = to_convex_hull(region_boundary_wgs84, utm_epsg, buffer_in_meters)
+                graph_layer = build_area_mask_geometry(
+                    region_boundary_wgs84,
+                    include_water=True,
+                    buffer_m=buffer_in_meters,
+                    buffer_epsg=utm_epsg,
+                )
                 network_type, simplify, retain_all, truncate_by_edge = "all", True, True, False
 
             else:

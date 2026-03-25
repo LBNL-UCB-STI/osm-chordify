@@ -7,6 +7,7 @@ import pandas as pd
 from shapely.geometry import LineString
 
 from osm_chordify import (
+    build_area_mask_from_counties,
     build_osm_by_pop_density,
     export_network,
     intersect_road_network_with_county_zones,
@@ -22,6 +23,7 @@ from osm_chordify.utils.io import save_geodataframe, save_dataframe
 def test_public_api_imports():
     """Verify the public API is importable and callable."""
     assert callable(build_osm_by_pop_density)
+    assert callable(build_area_mask_from_counties)
     assert callable(export_network)
     assert callable(intersect_road_network_with_county_zones)
     assert callable(intersect_road_network_with_zones)

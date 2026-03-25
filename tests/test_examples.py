@@ -152,6 +152,25 @@ def test_download_sfbay_counties_exposes_help():
     assert "--epsg" in result.stdout
 
 
+def test_download_sfbay_masks_exposes_help():
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "examples/download_sfbay_masks.py"), "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        "download_sfbay_masks.py --help failed.\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "--land-output-path" in result.stdout
+    assert "--whole-area-output-path" in result.stdout
+    assert "--buffer-m" in result.stdout
+
+
 def test_main_module_exposes_cli_help():
     env = os.environ.copy()
     src_path = str(ROOT / "src")
