@@ -133,6 +133,25 @@ def test_map_network_csv_to_osm_pbf_exposes_help():
     assert "--network-osm-id-col" in result.stdout
 
 
+def test_download_sfbay_counties_exposes_help():
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "examples/download_sfbay_counties.py"), "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        "download_sfbay_counties.py --help failed.\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "--work-dir" in result.stdout
+    assert "--output-path" in result.stdout
+    assert "--epsg" in result.stdout
+
+
 def test_main_module_exposes_cli_help():
     env = os.environ.copy()
     src_path = str(ROOT / "src")

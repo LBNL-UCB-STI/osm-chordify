@@ -210,8 +210,9 @@ def collect_geographic_boundaries(
         from pygris import counties, block_groups
 
         if geo_level == 'county':
-            # Define fips code for selected counties
-            geo_data = counties(state=state_fips_code, year=year, cb=True, cache=True)
+            # Use full TIGER/Line county boundaries so water-spanning assets
+            # such as bridges are not clipped away at the shoreline.
+            geo_data = counties(state=state_fips_code, year=year, cb=False, cache=True)
         elif geo_level == 'cbg':
             # Define fips code for selected counties
             geo_data = block_groups(state=state_fips_code, year=year, cb=True, cache=True)
