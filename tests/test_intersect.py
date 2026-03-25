@@ -323,3 +323,49 @@ def test_intersection_loads_parquet_inputs(tmp_path):
 
     assert len(result) == 1
     assert result.iloc[0]["zone_edge_proportion"] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_intersection_reuses_cached_output(monkeypatch, tmp_path):
+    edges = gpd.GeoDataFrame(
+        {
+            "osm_id": [1],
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [LineString([(0, 0), (10, 0)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["A"],
+            "geometry": [Polygon([(0, -1), (5, -1), (5, 1), (0, 1)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    output_path = tmp_path / "cached_intersection.geojson"
+
+    first = intersect_road_network_with_zones(
+        road_network=edges,
+        road_network_epsg=3857,
+        zones=zones,
+        output_path=output_path,
+    )
+    assert len(first) == 1
+    assert output_path.exists()
+    assert (tmp_path / "cached_intersection.geojson.cache.json").exists()
+
+    def _fail_sjoin(*args, **kwargs):
+        raise AssertionError("spatial join should not run when cache is reused")
+
+    monkeypatch.setattr(gpd, "sjoin", _fail_sjoin)
+
+    second = intersect_road_network_with_zones(
+        road_network=edges,
+        road_network_epsg=3857,
+        zones=zones,
+        output_path=output_path,
+    )
+    assert len(second) == 1
+    assert second.iloc[0]["zone_edge_proportion"] == pytest.approx(0.5, abs=1e-6)
