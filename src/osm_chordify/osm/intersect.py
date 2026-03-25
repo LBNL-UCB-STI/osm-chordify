@@ -14,14 +14,13 @@ import warnings
 import geopandas as gpd
 import pandas as pd
 from pyproj import CRS
+from shapely.geometry import GeometryCollection, box
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
 LINE_GEOMETRY_TYPES = {"LineString", "MultiLineString"}
 INTERSECTION_CHUNK_SIZE = 50000
-ZONE_FILTER_CHUNK_SIZE = 10000
-EDGE_FILTER_CHUNK_SIZE = 5000
 
 
 def load_osm_edges(osm_gpkg_path):
@@ -165,7 +164,7 @@ def _intersection_cache_metadata(
     road_network_epsg,
     zones,
     output_epsg,
-    road_buffer_filter_m,
+    prefilter_zones_to_network_bbox,
 ):
     """Return metadata used to validate a reusable intersection cache."""
     return {
@@ -173,8 +172,8 @@ def _intersection_cache_metadata(
         "road_network_epsg": road_network_epsg,
         "zones": _fingerprint_source(zones),
         "output_epsg": output_epsg,
-        "road_buffer_filter_m": road_buffer_filter_m,
-        "schema_version": 2,
+        "prefilter_zones_to_network_bbox": prefilter_zones_to_network_bbox,
+        "schema_version": 3,
     }
 
 
@@ -262,6 +261,34 @@ def _build_result_gdf(matched, edge_attr_cols, zone_attr_cols, crs):
     return gpd.GeoDataFrame(result_data, geometry="geometry", crs=crs)[result_cols]
 
 
+def _build_void_rows(zones, edge_attr_cols, zone_attr_cols, crs):
+    """Build placeholder rows for kept zones with no intersecting link pieces."""
+    result_cols = ["zone_edge_proportion", "edge_link_length_m", "zone_link_length_m", "geometry"]
+    result_data = {
+        "zone_edge_proportion": ["voided"] * len(zones),
+        "edge_link_length_m": ["voided"] * len(zones),
+        "zone_link_length_m": ["voided"] * len(zones),
+        "geometry": [GeometryCollection() for _ in range(len(zones))],
+    }
+
+    existing_keys = set(result_cols)
+    for col in edge_attr_cols:
+        out_col = _edge_output_name(col)
+        result_data[out_col] = ["voided"] * len(zones)
+        if out_col not in result_cols:
+            result_cols.append(out_col)
+            existing_keys.add(out_col)
+
+    for col in zone_attr_cols:
+        out_col = _zone_output_name(col, existing_keys)
+        result_data[out_col] = zones[col].tolist()
+        if out_col not in result_cols:
+            result_cols.append(out_col)
+            existing_keys.add(out_col)
+
+    return gpd.GeoDataFrame(result_data, geometry="geometry", crs=crs)[result_cols]
+
+
 def _compute_intersection_chunk(chunk, crs):
     """Compute exact intersections for one matched edge/zone chunk."""
     edge_geom_series = gpd.GeoSeries(chunk["edge_geometry"], crs=crs)
@@ -302,97 +329,42 @@ def _is_county_like_zones(polys_proj):
     )
 
 
-def _prefilter_zones_against_buffer(polys_proj, edges_proj, road_buffer_filter_m):
-    """Filter out zones that do not intersect a buffered road-network corridor."""
-    if road_buffer_filter_m is None or road_buffer_filter_m <= 0:
-        raise ValueError(
-            "road_buffer_filter_m must be positive when buffered zone prefiltering is enabled."
-        )
+def _prefilter_zones_to_network_bbox(polys_proj, edges_proj):
+    """Keep only zones that intersect the overall road-network bounding box."""
+    if edges_proj.empty or polys_proj.empty:
+        return polys_proj.iloc[0:0].copy()
 
+    minx, miny, maxx, maxy = edges_proj.total_bounds
+    network_bbox = box(minx, miny, maxx, maxy)
     logger.info(
-        "Filtering %d zones against a %.2fm buffered road-network corridor before exact intersection",
+        "Filtering %d zones against the road-network bounding box before exact intersection",
         len(polys_proj),
-        road_buffer_filter_m,
     )
-    zone_sindex = polys_proj.sindex
-    candidate_zone_indices = set()
-
     with tqdm(
-        total=len(edges_proj) * 2,
+        total=2,
         desc="Filtering zones",
-        unit="edge",
+        unit="step",
         dynamic_ncols=True,
         leave=True,
         mininterval=0.5,
     ) as pbar:
-        pbar.set_postfix_str("bbox screening")
-        for start in range(0, len(edges_proj), EDGE_FILTER_CHUNK_SIZE):
-            edge_chunk = edges_proj.iloc[start:start + EDGE_FILTER_CHUNK_SIZE]
-            bounds = edge_chunk.geometry.bounds
-            for row in bounds.itertuples(index=False):
-                search_bounds = (
-                    row.minx - road_buffer_filter_m,
-                    row.miny - road_buffer_filter_m,
-                    row.maxx + road_buffer_filter_m,
-                    row.maxy + road_buffer_filter_m,
-                )
-                candidate_zone_indices.update(zone_sindex.intersection(search_bounds))
-            pbar.update(len(edge_chunk))
-            pbar.set_postfix_str(
-                f"candidate_zones={len(candidate_zone_indices)}, dropped={len(polys_proj) - len(candidate_zone_indices)}"
-            )
+        pbar.set_postfix_str("building network bbox")
+        search_bounds = network_bbox.bounds
+        pbar.update(1)
 
-        if not candidate_zone_indices:
-            pbar.set_postfix_str(f"candidate_zones=0, dropped={len(polys_proj)}")
-            pbar.update(len(edges_proj))
-            logger.info("Zone prefilter kept 0/%d zones after buffered-road screening", len(polys_proj))
-            return polys_proj.iloc[0:0].copy()
+        pbar.set_postfix_str("screening zones")
+        candidate_zone_indices = polys_proj.sindex.intersection(search_bounds)
+        if len(candidate_zone_indices):
+            candidate_grid = polys_proj.iloc[sorted(candidate_zone_indices)].copy()
+            exact_keep = candidate_grid.geometry.intersects(network_bbox)
+            filtered = candidate_grid.loc[exact_keep].copy()
+        else:
+            filtered = polys_proj.iloc[0:0].copy()
+        pbar.update(1)
+        pbar.set_postfix_str(f"kept={len(filtered)}, dropped={len(polys_proj) - len(filtered)}")
 
-        candidate_grid = polys_proj.loc[sorted(candidate_zone_indices)].copy()
-        candidate_grid_sindex = candidate_grid.sindex
-        kept_zone_indices = set()
-        pbar.set_postfix_str(
-            f"exact screening on {len(candidate_grid)}/{len(polys_proj)} candidate zones"
-        )
-        for start in range(0, len(edges_proj), EDGE_FILTER_CHUNK_SIZE):
-            edge_chunk = edges_proj.iloc[start:start + EDGE_FILTER_CHUNK_SIZE]
-            if len(kept_zone_indices) == len(candidate_grid):
-                pbar.update(len(edge_chunk))
-                pbar.set_postfix_str(
-                    f"kept={len(kept_zone_indices)}, dropped={len(polys_proj) - len(kept_zone_indices)}"
-                )
-                continue
-
-            bounds = edge_chunk.geometry.bounds
-            candidate_chunk_indices = set()
-            for row in bounds.itertuples(index=False):
-                search_bounds = (
-                    row.minx - road_buffer_filter_m,
-                    row.miny - road_buffer_filter_m,
-                    row.maxx + road_buffer_filter_m,
-                    row.maxy + road_buffer_filter_m,
-                )
-                candidate_chunk_indices.update(candidate_grid_sindex.intersection(search_bounds))
-
-            if candidate_chunk_indices:
-                candidate_chunk = candidate_grid.iloc[sorted(candidate_chunk_indices)]
-                buffered_chunk = edge_chunk.geometry.buffer(road_buffer_filter_m)
-                chunk_union = (
-                    buffered_chunk.union_all()
-                    if hasattr(buffered_chunk, "union_all")
-                    else buffered_chunk.unary_union
-                )
-                exact_keep = candidate_chunk.geometry.intersects(chunk_union)
-                kept_zone_indices.update(candidate_chunk.loc[exact_keep].index)
-
-            pbar.update(len(edge_chunk))
-            pbar.set_postfix_str(
-                f"kept={len(kept_zone_indices)}, dropped={len(polys_proj) - len(kept_zone_indices)}"
-            )
-
-    filtered = polys_proj.loc[sorted(kept_zone_indices)].copy()
     logger.info(
-        "Zone prefilter kept %d/%d zones after buffered-road screening",
+        "Zone prefilter kept %d/%d zones after network-bbox screening",
         len(filtered),
         len(polys_proj),
     )
@@ -405,7 +377,7 @@ def intersect_road_network_with_zones(
     zones,
     output_path=None,
     output_epsg=None,
-    road_buffer_filter_m=None,
+    prefilter_zones_to_network_bbox=False,
 ):
     """Intersect road-network edges with zone polygons.
 
@@ -435,10 +407,9 @@ def intersect_road_network_with_zones(
     output_epsg : int, optional
         EPSG code for the output CRS.  Defaults to *road_network_epsg*
         if not provided.
-    road_buffer_filter_m : float, optional
-        If provided, buffer the road network by this many meters and drop
-        zones that do not intersect that corridor before exact intersection.
-        ``None`` disables the prefilter.
+    prefilter_zones_to_network_bbox : bool, optional
+        If ``True``, keep only zones that intersect the overall road-network
+        bounding box before exact intersection.
 
     Returns
     -------
@@ -460,7 +431,7 @@ def intersect_road_network_with_zones(
         road_network_epsg=road_network_epsg,
         zones=zones,
         output_epsg=output_epsg,
-        road_buffer_filter_m=road_buffer_filter_m,
+        prefilter_zones_to_network_bbox=prefilter_zones_to_network_bbox,
     )
     cached_result = _try_load_cached_intersection(output_path, cache_metadata)
     if cached_result is not None:
@@ -471,8 +442,8 @@ def intersect_road_network_with_zones(
     edges_proj = _project_if_needed(edges_gdf, road_network_epsg)
     polys_proj = _project_if_needed(polygons_gdf, road_network_epsg)
 
-    if road_buffer_filter_m is not None and len(polys_proj):
-        polys_proj = _prefilter_zones_against_buffer(polys_proj, edges_proj, road_buffer_filter_m)
+    if prefilter_zones_to_network_bbox and len(polys_proj):
+        polys_proj = _prefilter_zones_to_network_bbox(polys_proj, edges_proj)
 
     edge_attr_cols = [c for c in edges_gdf.columns if c != "geometry"]
     zone_attr_cols = [c for c in polygons_gdf.columns if c != "geometry"]
@@ -541,6 +512,15 @@ def intersect_road_network_with_zones(
     )
 
     if len(pairs) == 0 and (direct_matches is None or direct_matches.empty):
+        if prefilter_zones_to_network_bbox and len(polys_proj):
+            logger.warning("No intersections found inside bbox-filtered zones — returning voided zone rows")
+            voided = _build_void_rows(polys_proj, edge_attr_cols, zone_attr_cols, output_epsg)
+            if output_path:
+                from osm_chordify.utils.io import save_geodataframe
+                save_geodataframe(voided, output_path)
+                _write_intersection_cache_metadata(output_path, cache_metadata)
+                logger.info("Saved intersection to %s", output_path)
+            return voided
         logger.warning("No intersections found — returning empty GeoDataFrame")
         empty_cols = ["zone_edge_proportion", "edge_link_length_m", "zone_link_length_m", "geometry"]
         return gpd.GeoDataFrame(
@@ -600,6 +580,13 @@ def intersect_road_network_with_zones(
         crs=road_network_epsg,
     )
     result_gdf = _build_result_gdf(matched_all, edge_attr_cols, zone_attr_cols, road_network_epsg)
+    if prefilter_zones_to_network_bbox and "__zone_idx" in matched_all.columns:
+        matched_zone_indices = set(matched_all["__zone_idx"].unique())
+        missing_zone_rows = polys_indexed.loc[~polys_indexed["__zone_idx"].isin(matched_zone_indices)]
+        if len(missing_zone_rows):
+            voided = _build_void_rows(missing_zone_rows, edge_attr_cols, zone_attr_cols, road_network_epsg)
+            result_gdf = pd.concat([result_gdf, voided], ignore_index=True)
+            result_gdf = gpd.GeoDataFrame(result_gdf, geometry="geometry", crs=road_network_epsg)
 
     logger.info(
         "Intersection produced %d results across %d/%d zones (edge hits=%d)",

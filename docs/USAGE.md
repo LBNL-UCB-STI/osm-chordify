@@ -131,7 +131,7 @@ Older carried attributes remain available through the prefixed `edge_...` /
 `zone_...` columns.
 
 For dense grids, `intersect_road_network_with_zones(...)` and the county helper
-can optionally prefilter zones against a buffered road-network corridor before
+can optionally prefilter zones to the overall road-network bounding box before
 the exact intersection stage:
 
 ```python
@@ -139,14 +139,16 @@ result = intersect_road_network_with_zones(
     road_network="./output/network/network.gpkg",
     road_network_epsg=26910,
     zones="./output/grid/isrm_polygon.shp",
-    road_buffer_filter_m=100.0,
+    prefilter_zones_to_network_bbox=True,
     output_path="./output/grid/network-grid-intersection.parquet",
 )
 ```
 
 When enabled, `osm-chordify` logs an informative filtering message and shows a
 dedicated `Filtering zones` progress bar before the exact-intersection stage.
-Set `road_buffer_filter_m=None` to skip the prefilter entirely.
+Set `prefilter_zones_to_network_bbox=False` to skip the prefilter entirely.
+Zones that survive the bbox prefilter but contain no intersecting link pieces
+are retained as `voided` rows instead of being dropped.
 
 `area_name` only controls the cached boundary filename; the actual county
 selection comes from `state_fips_code` and `county_fips_codes`. County

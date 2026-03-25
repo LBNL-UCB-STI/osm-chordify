@@ -107,7 +107,7 @@ def test_intersection_rejects_geographic_working_crs():
         )
 
 
-def test_intersection_can_prefilter_zones_with_buffer(monkeypatch):
+def test_intersection_can_prefilter_zones_to_network_bbox(monkeypatch):
     edges = gpd.GeoDataFrame(
         {
             "osm_id": [1],
@@ -128,15 +128,14 @@ def test_intersection_can_prefilter_zones_with_buffer(monkeypatch):
     )
 
     calls = {}
-    original = __import__("osm_chordify.osm.intersect", fromlist=["_prefilter_zones_against_buffer"])._prefilter_zones_against_buffer
+    original = __import__("osm_chordify.osm.intersect", fromlist=["_prefilter_zones_to_network_bbox"])._prefilter_zones_to_network_bbox
 
-    def _wrapped_prefilter(polys_proj, edges_proj, road_buffer_filter_m):
+    def _wrapped_prefilter(polys_proj, edges_proj):
         calls["count"] = calls.get("count", 0) + 1
-        calls["road_buffer_filter_m"] = road_buffer_filter_m
-        return original(polys_proj, edges_proj, road_buffer_filter_m)
+        return original(polys_proj, edges_proj)
 
     monkeypatch.setattr(
-        "osm_chordify.osm.intersect._prefilter_zones_against_buffer",
+        "osm_chordify.osm.intersect._prefilter_zones_to_network_bbox",
         _wrapped_prefilter,
     )
 
@@ -144,12 +143,11 @@ def test_intersection_can_prefilter_zones_with_buffer(monkeypatch):
         road_network=edges,
         road_network_epsg=3857,
         zones=zones,
-        road_buffer_filter_m=25.0,
+        prefilter_zones_to_network_bbox=True,
     )
 
     assert len(result) == 1
     assert calls["count"] == 1
-    assert calls["road_buffer_filter_m"] == 25.0
 
 
 def test_prefilter_drops_far_zones_and_keeps_nearby_zones():
@@ -179,11 +177,49 @@ def test_prefilter_drops_far_zones_and_keeps_nearby_zones():
         road_network=edges,
         road_network_epsg=3857,
         zones=zones,
-        road_buffer_filter_m=25.0,
+        prefilter_zones_to_network_bbox=True,
     )
 
     assert len(result) == 1
     assert result.iloc[0]["zone_zone_id"] == "near"
+
+
+def test_bbox_prefilter_keeps_voided_rows_for_bbox_cells_without_link_pieces():
+    edges = gpd.GeoDataFrame(
+        {
+            "osm_id": [1],
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [LineString([(0, 0), (10, 0)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["hit", "voided", "outside"],
+            "geometry": [
+                Polygon([(0, -1), (5, -1), (5, 1), (0, 1)]),
+                Polygon([(10, -1), (12, -1), (12, 1), (10, 1)]),
+                Polygon([(1000, 1000), (1010, 1000), (1010, 1010), (1000, 1010)]),
+            ],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    result = intersect_road_network_with_zones(
+        road_network=edges,
+        road_network_epsg=3857,
+        zones=zones,
+        prefilter_zones_to_network_bbox=True,
+    )
+
+    assert set(result["zone_zone_id"]) == {"hit", "voided"}
+    voided = result[result["zone_zone_id"] == "voided"].iloc[0]
+    assert voided["zone_edge_proportion"] == "voided"
+    assert voided["edge_link_length_m"] == "voided"
+    assert voided["zone_link_length_m"] == "voided"
 
 
 def _make_edges():

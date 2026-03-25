@@ -2,6 +2,10 @@
 
 Download, filter, and export OSM road networks using population-density-based boundaries. Intersect the resulting geometries with polygon grids (TAZ, census tracts, ISRM cells, etc.) and map them to BEAM/MATSim simulation network.
 
+No AI Training Use: The contents of this repository may not be used to train,
+fine-tune, evaluate, benchmark, or improve machine learning or artificial
+intelligence models without prior written permission. See [NOAI](./NOAI).
+
 ## Installation
 
 Requires Python 3.10+.
@@ -70,14 +74,17 @@ Intersection outputs always include:
 These three columns always describe the latest intersection step. In chained intersections, earlier prefixed `edge_...` / `zone_...` fields are carried forward, but the top-level fixed columns are recomputed for the current step.
 
 For dense grids, `intersect_road_network_with_zones(...)` can optionally
-prefilter zones against a buffered road-network corridor before exact
+prefilter zones to the overall road-network bounding box before exact
 intersection:
 
-- `road_buffer_filter_m=None` disables the prefilter
-- `road_buffer_filter_m=100.0` enables a 100 m buffered-road prefilter
+- `prefilter_zones_to_network_bbox=False` disables the prefilter
+- `prefilter_zones_to_network_bbox=True` keeps only zones intersecting the
+  network bounding box
 
-This drops cells outside the buffered corridor first and shows a dedicated
-`Filtering zones` progress bar before the exact-intersection progress bar.
+This reduces the zone set before exact intersection and shows a dedicated
+`Filtering zones` progress bar. Zones kept by the bounding-box prefilter that
+still contain no intersecting link pieces are preserved as `voided` rows
+instead of being dropped.
 
 Networks can be exported as GraphML, PKL, GPKG, OSM XML, OSM PBF, and GeoJSON.
 
