@@ -152,6 +152,40 @@ def test_intersection_can_prefilter_zones_with_buffer(monkeypatch):
     assert calls["road_buffer_filter_m"] == 25.0
 
 
+def test_prefilter_drops_far_zones_and_keeps_nearby_zones():
+    edges = gpd.GeoDataFrame(
+        {
+            "osm_id": [1],
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [LineString([(0, 0), (10, 0)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["near", "far"],
+            "geometry": [
+                Polygon([(0, -2), (5, -2), (5, 2), (0, 2)]),
+                Polygon([(1000, 1000), (1010, 1000), (1010, 1010), (1000, 1010)]),
+            ],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    result = intersect_road_network_with_zones(
+        road_network=edges,
+        road_network_epsg=3857,
+        zones=zones,
+        road_buffer_filter_m=25.0,
+    )
+
+    assert len(result) == 1
+    assert result.iloc[0]["zone_zone_id"] == "near"
+
+
 def _make_edges():
     return gpd.GeoDataFrame(
         {

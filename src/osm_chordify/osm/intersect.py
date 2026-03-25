@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 LINE_GEOMETRY_TYPES = {"LineString", "MultiLineString"}
 INTERSECTION_CHUNK_SIZE = 50000
 ZONE_FILTER_CHUNK_SIZE = 10000
+EDGE_FILTER_CHUNK_SIZE = 5000
 
 
 def load_osm_edges(osm_gpkg_path):
@@ -313,32 +314,83 @@ def _prefilter_zones_against_buffer(polys_proj, edges_proj, road_buffer_filter_m
         len(polys_proj),
         road_buffer_filter_m,
     )
-    network_union = (
-        edges_proj.geometry.union_all()
-        if hasattr(edges_proj.geometry, "union_all")
-        else edges_proj.geometry.unary_union
-    )
-    buffered_network = network_union.buffer(road_buffer_filter_m)
+    zone_sindex = polys_proj.sindex
+    candidate_zone_indices = set()
 
-    keep_masks = []
     with tqdm(
-        total=len(polys_proj),
+        total=len(edges_proj) * 2,
         desc="Filtering zones",
-        unit="zone",
+        unit="edge",
         dynamic_ncols=True,
         leave=True,
         mininterval=0.5,
     ) as pbar:
-        for start in range(0, len(polys_proj), ZONE_FILTER_CHUNK_SIZE):
-            chunk = polys_proj.iloc[start:start + ZONE_FILTER_CHUNK_SIZE]
-            keep_mask = chunk.geometry.intersects(buffered_network)
-            keep_masks.append(keep_mask)
-            pbar.update(len(chunk))
-            kept = sum(mask.sum() for mask in keep_masks)
-            pbar.set_postfix_str(f"kept={kept}, dropped={pbar.n - kept}")
+        pbar.set_postfix_str("bbox screening")
+        for start in range(0, len(edges_proj), EDGE_FILTER_CHUNK_SIZE):
+            edge_chunk = edges_proj.iloc[start:start + EDGE_FILTER_CHUNK_SIZE]
+            bounds = edge_chunk.geometry.bounds
+            for row in bounds.itertuples(index=False):
+                search_bounds = (
+                    row.minx - road_buffer_filter_m,
+                    row.miny - road_buffer_filter_m,
+                    row.maxx + road_buffer_filter_m,
+                    row.maxy + road_buffer_filter_m,
+                )
+                candidate_zone_indices.update(zone_sindex.intersection(search_bounds))
+            pbar.update(len(edge_chunk))
+            pbar.set_postfix_str(
+                f"candidate_zones={len(candidate_zone_indices)}, dropped={len(polys_proj) - len(candidate_zone_indices)}"
+            )
 
-    combined_mask = pd.concat(keep_masks).reindex(polys_proj.index, fill_value=False)
-    filtered = polys_proj.loc[combined_mask].copy()
+        if not candidate_zone_indices:
+            pbar.set_postfix_str(f"candidate_zones=0, dropped={len(polys_proj)}")
+            pbar.update(len(edges_proj))
+            logger.info("Zone prefilter kept 0/%d zones after buffered-road screening", len(polys_proj))
+            return polys_proj.iloc[0:0].copy()
+
+        candidate_grid = polys_proj.loc[sorted(candidate_zone_indices)].copy()
+        candidate_grid_sindex = candidate_grid.sindex
+        kept_zone_indices = set()
+        pbar.set_postfix_str(
+            f"exact screening on {len(candidate_grid)}/{len(polys_proj)} candidate zones"
+        )
+        for start in range(0, len(edges_proj), EDGE_FILTER_CHUNK_SIZE):
+            edge_chunk = edges_proj.iloc[start:start + EDGE_FILTER_CHUNK_SIZE]
+            if len(kept_zone_indices) == len(candidate_grid):
+                pbar.update(len(edge_chunk))
+                pbar.set_postfix_str(
+                    f"kept={len(kept_zone_indices)}, dropped={len(polys_proj) - len(kept_zone_indices)}"
+                )
+                continue
+
+            bounds = edge_chunk.geometry.bounds
+            candidate_chunk_indices = set()
+            for row in bounds.itertuples(index=False):
+                search_bounds = (
+                    row.minx - road_buffer_filter_m,
+                    row.miny - road_buffer_filter_m,
+                    row.maxx + road_buffer_filter_m,
+                    row.maxy + road_buffer_filter_m,
+                )
+                candidate_chunk_indices.update(candidate_grid_sindex.intersection(search_bounds))
+
+            if candidate_chunk_indices:
+                candidate_chunk = candidate_grid.iloc[sorted(candidate_chunk_indices)]
+                buffered_chunk = edge_chunk.geometry.buffer(road_buffer_filter_m)
+                chunk_union = (
+                    buffered_chunk.union_all()
+                    if hasattr(buffered_chunk, "union_all")
+                    else buffered_chunk.unary_union
+                )
+                exact_keep = candidate_chunk.geometry.intersects(chunk_union)
+                kept_zone_indices.update(candidate_chunk.loc[exact_keep].index)
+
+            pbar.update(len(edge_chunk))
+            pbar.set_postfix_str(
+                f"kept={len(kept_zone_indices)}, dropped={len(polys_proj) - len(kept_zone_indices)}"
+            )
+
+    filtered = polys_proj.loc[sorted(kept_zone_indices)].copy()
     logger.info(
         "Zone prefilter kept %d/%d zones after buffered-road screening",
         len(filtered),
