@@ -9,6 +9,7 @@
 import logging
 import os
 import json
+import warnings
 
 import geopandas as gpd
 import pandas as pd
@@ -92,6 +93,11 @@ def _project_if_needed(gdf, epsg):
         if current_epsg == epsg:
             return gdf
     return gdf.to_crs(epsg=epsg)
+
+
+def _is_geographic_crs(crs):
+    """Return True when the CRS is geographic (degrees), else False."""
+    return crs is not None and getattr(crs, "is_geographic", False)
 
 
 def _load_saved_geodataframe(path):
@@ -255,8 +261,14 @@ def _compute_intersection_chunk(chunk, crs):
         return chunk
 
     intersection_series = intersection_series.loc[nonempty_mask & line_mask]
-    edge_lengths = edge_geom_series.loc[chunk.index].length.round(2)
-    zone_lengths = intersection_series.length.round(2)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Geometry is in a geographic CRS.*",
+            category=UserWarning,
+        )
+        edge_lengths = edge_geom_series.loc[chunk.index].length.round(2)
+        zone_lengths = intersection_series.length.round(2)
 
     chunk["geometry"] = intersection_series
     chunk["edge_link_length_m"] = edge_lengths
@@ -338,6 +350,13 @@ def intersect_road_network_with_zones(
     logger.info("Projecting geometries to EPSG:%d", road_network_epsg)
     edges_proj = _project_if_needed(edges_gdf, road_network_epsg)
     polys_proj = _project_if_needed(polygons_gdf, road_network_epsg)
+
+    if _is_geographic_crs(edges_proj.crs):
+        logger.warning(
+            "Intersection CRS EPSG:%d is geographic; length-based outputs will be in degree-based units rather than meters. "
+            "Use a projected CRS for defensible length calculations.",
+            road_network_epsg,
+        )
 
     edge_attr_cols = [c for c in edges_gdf.columns if c != "geometry"]
     zone_attr_cols = [c for c in polygons_gdf.columns if c != "geometry"]
@@ -431,6 +450,8 @@ def intersect_road_network_with_zones(
             desc="Computing intersections",
             unit="pair",
             dynamic_ncols=True,
+            leave=False,
+            mininterval=0.5,
         ) as pbar:
             for start in range(0, len(matched), INTERSECTION_CHUNK_SIZE):
                 chunk = matched.iloc[start:start + INTERSECTION_CHUNK_SIZE].copy()
@@ -438,7 +459,9 @@ def intersect_road_network_with_zones(
                 if not chunk_result.empty:
                     exact_parts.append(chunk_result)
                 pbar.update(len(chunk))
-                pbar.set_postfix(hit_zones=hit_zones, pieces=sum(len(p) for p in exact_parts), edge_hits=edge_hits)
+                pbar.set_postfix_str(
+                    f"hit_zones={hit_zones}, pieces={sum(len(p) for p in exact_parts)}, edge_hits={edge_hits}"
+                )
 
     frames = []
     if direct_matches is not None and not direct_matches.empty:
