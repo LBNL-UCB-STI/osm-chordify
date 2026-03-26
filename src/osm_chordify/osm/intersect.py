@@ -750,6 +750,10 @@ def _infer_polygon_piece_length_col(gdf, piece_length_col=None):
     for candidate in ("zone_link_length_m", "edge_link_length_m", "edge_length_m", "edge_length", "length"):
         if candidate in gdf.columns:
             return candidate
+    for suffix in ("_zone_piece_length_m", "_piece_link_length_m", "_zone_link_length_m", "_edge_link_length_m"):
+        matches = [col for col in gdf.columns if col.endswith(suffix)]
+        if matches:
+            return matches[0]
 
     raise ValueError(
         "polygon cascade inputs must include a length column. "
@@ -1118,16 +1122,61 @@ def intersect_polygons_with_zones(
     logger.info("Intersecting %d zones with %d polygon pieces", len(zones_proj), len(polygons_proj))
     polygons_indexed = polygons_proj.reset_index(drop=True).reset_index(names="__poly_idx")
     zones_indexed = zones_proj.reset_index(drop=True).reset_index(names="__zone_idx")
+    direct_matches = None
+    crossing_polygons = polygons_indexed
+
+    if _is_county_like_zones(zones_indexed):
+        logger.info("Using county fast path for non-boundary-crossing polygon pieces")
+        boundaries = zones_indexed.geometry.boundary
+        boundary_union = boundaries.union_all() if hasattr(boundaries, "union_all") else boundaries.unary_union
+        crosses_boundary = polygons_indexed.geometry.intersects(boundary_union)
+        contained_polygons = polygons_indexed.loc[~crosses_boundary].copy()
+        crossing_polygons = polygons_indexed.loc[crosses_boundary].copy()
+
+        if not contained_polygons.empty:
+            reps = contained_polygons.copy()
+            reps["geometry"] = reps.geometry.representative_point()
+            direct_matches = gpd.sjoin(
+                reps[["__poly_idx", "geometry"]],
+                zones_indexed[["__zone_idx", "geometry"]],
+                how="inner",
+                predicate="within",
+            ).drop(columns=["index_right"])
+            direct_matches = direct_matches.merge(
+                polygons_indexed.drop(columns=["geometry"]),
+                on="__poly_idx",
+                how="left",
+            ).merge(
+                zones_indexed.rename(columns={"geometry": "zone_geometry"}),
+                on="__zone_idx",
+                how="left",
+            )
+            direct_matches["geometry"] = contained_polygons.set_index("__poly_idx").loc[
+                direct_matches["__poly_idx"], "geometry"
+            ].values
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="Geometry is in a geographic CRS.*",
+                    category=UserWarning,
+                )
+                polygon_areas = gpd.GeoSeries(direct_matches["geometry"], crs=polygons_epsg).area.round(2)
+            piece_lengths = pd.to_numeric(direct_matches[piece_length_col], errors="coerce").round(2)
+            direct_matches[metric_names["proportion"]] = 1.0
+            direct_matches[metric_names["piece_length"]] = piece_lengths
+            direct_matches[metric_names["zone_length"]] = piece_lengths
+            direct_matches[metric_names["piece_surface"]] = polygon_areas
+            direct_matches[metric_names["zone_surface"]] = polygon_areas
 
     pairs = gpd.sjoin(
-        polygons_indexed[["__poly_idx", "geometry"]],
+        crossing_polygons[["__poly_idx", "geometry"]],
         zones_indexed[["__zone_idx", "geometry"]],
         how="inner",
         predicate="intersects",
     )
     pairs = pairs.rename(columns={"geometry": "polygon_geometry"}).drop(columns=["index_right"])
 
-    if len(pairs) == 0:
+    if len(pairs) == 0 and (direct_matches is None or direct_matches.empty):
         if prefilter_zones_to_network_bbox and len(zones_proj):
             voided = _build_cascade_void_rows(
                 zones_indexed,
@@ -1166,30 +1215,37 @@ def intersect_polygons_with_zones(
     )
 
     exact_parts = []
-    with tqdm(
-        total=len(matched),
-        desc="Computing polygon intersections",
-        unit="pair",
-        dynamic_ncols=True,
-        leave=True,
-        mininterval=0.5,
-    ) as pbar:
-        for start in range(0, len(matched), INTERSECTION_CHUNK_SIZE):
-            chunk = matched.iloc[start:start + INTERSECTION_CHUNK_SIZE].copy()
-            chunk_result = _compute_polygon_cascade_chunk(
-                chunk,
-                polygons_epsg,
-                piece_length_col,
-                metric_names=metric_names,
-            )
-            if not chunk_result.empty:
-                exact_parts.append(chunk_result)
-            pbar.update(len(chunk))
-            pbar.set_postfix_str(
-                f"hit_zones={pairs['__zone_idx'].nunique()}, pieces={sum(len(p) for p in exact_parts)}, poly_hits={len(pairs)}"
-            )
+    if len(pairs):
+        with tqdm(
+            total=len(matched),
+            desc="Computing polygon intersections",
+            unit="pair",
+            dynamic_ncols=True,
+            leave=True,
+            mininterval=0.5,
+        ) as pbar:
+            for start in range(0, len(matched), INTERSECTION_CHUNK_SIZE):
+                chunk = matched.iloc[start:start + INTERSECTION_CHUNK_SIZE].copy()
+                chunk_result = _compute_polygon_cascade_chunk(
+                    chunk,
+                    polygons_epsg,
+                    piece_length_col,
+                    metric_names=metric_names,
+                )
+                if not chunk_result.empty:
+                    exact_parts.append(chunk_result)
+                pbar.update(len(chunk))
+                pbar.set_postfix_str(
+                    f"hit_zones={pairs['__zone_idx'].nunique()}, pieces={sum(len(p) for p in exact_parts)}, poly_hits={len(pairs)}"
+                )
 
-    if not exact_parts:
+    frames = []
+    if direct_matches is not None and not direct_matches.empty:
+        frames.append(direct_matches)
+    if exact_parts:
+        frames.extend(exact_parts)
+
+    if not frames:
         return gpd.GeoDataFrame(
             columns=list(polygon_attr_cols) + [
                 metric_names["proportion"],
@@ -1203,7 +1259,11 @@ def intersect_polygons_with_zones(
             crs=output_epsg,
         )
 
-    matched_all = gpd.GeoDataFrame(pd.concat(exact_parts, ignore_index=True), geometry="geometry", crs=polygons_epsg)
+    matched_all = gpd.GeoDataFrame(
+        frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True),
+        geometry="geometry",
+        crs=polygons_epsg,
+    )
     result_gdf = _build_cascade_result_gdf(
         matched_all,
         polygon_attr_cols,

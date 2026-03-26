@@ -659,6 +659,42 @@ def test_intersect_polygons_with_zones_preserves_existing_columns_and_recomputes
     assert result.iloc[0]["inmap_zone_surface_m2"] == pytest.approx(10.0, abs=1e-6)
 
 
+def test_intersect_polygons_with_zones_uses_county_fast_path_for_contained_pieces():
+    polygons = gpd.GeoDataFrame(
+        {
+            "piece_id": [1],
+            "inmap_zone_piece_length_m": [10.0],
+            "geometry": [Polygon([(0, 0), (4, 0), (4, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    counties = gpd.GeoDataFrame(
+        {
+            "COUNTYFP": ["001", "013"],
+            "geometry": [
+                Polygon([(-1, -1), (5, -1), (5, 3), (-1, 3)]),
+                Polygon([(10, -1), (15, -1), (15, 3), (10, 3)]),
+            ],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    result = intersect_polygons_with_zones(
+        polygons=polygons,
+        polygons_epsg=3857,
+        zones=counties,
+        zone_label="county",
+    )
+
+    assert len(result) == 1
+    assert result.iloc[0]["county_COUNTYFP"] == "001"
+    assert result.iloc[0]["county_zone_piece_proportion"] == pytest.approx(1.0, abs=1e-6)
+    assert result.iloc[0]["county_piece_link_length_m"] == pytest.approx(10.0, abs=1e-6)
+    assert result.iloc[0]["county_zone_piece_length_m"] == pytest.approx(10.0, abs=1e-6)
+
+
 def test_spatial_left_join_with_zones_keeps_unmatched_rows_with_null_zone_fields():
     pieces = gpd.GeoDataFrame(
         {
