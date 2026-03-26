@@ -202,6 +202,31 @@ whole_area_mask = build_area_mask_from_counties(
 )
 ```
 
+## Zone-to-zone intersection
+
+Use `intersect_zones_with_zones(...)` to intersect one polygon zone layer with
+another, for example counties with a model grid.
+
+Example:
+
+```python
+from osm_chordify import intersect_zones_with_zones
+
+overlap = intersect_zones_with_zones(
+    zones_a="./output/geo/counties.parquet",
+    zones_a_epsg=26910,
+    zones_b="./output/geo/isrm_grid.parquet",
+    zones_b_epsg=26910,
+    output_path="./output/geo/county_grid_overlap.parquet",
+)
+```
+
+The result contains one polygon overlap piece per intersecting pair and keeps
+attributes from both inputs with explicit prefixes:
+
+- `zone_a_*`
+- `zone_b_*`
+
 ## Project structure
 
 ```text

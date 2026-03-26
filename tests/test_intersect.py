@@ -4,7 +4,7 @@ import pytest
 from shapely.geometry import LineString, Point, Polygon
 
 from osm_chordify.main import build_area_mask_from_counties, intersect_road_network_with_county_zones
-from osm_chordify.osm.intersect import intersect_road_network_with_zones
+from osm_chordify.osm.intersect import intersect_road_network_with_zones, intersect_zones_with_zones
 
 
 def test_intersection_includes_fixed_length_and_zone_edge_proportion_columns():
@@ -591,3 +591,202 @@ def test_intersection_reuses_cached_output(monkeypatch, tmp_path):
     )
     assert len(second) == 1
     assert second.iloc[0]["zone_edge_proportion"] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_intersect_zones_with_zones_returns_prefixed_polygon_overlaps():
+    zones_a = gpd.GeoDataFrame(
+        {
+            "county_id": ["001"],
+            "geometry": [Polygon([(0, 0), (4, 0), (4, 4), (0, 4)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones_b = gpd.GeoDataFrame(
+        {
+            "grid_id": ["cell-1"],
+            "geometry": [Polygon([(2, 2), (6, 2), (6, 6), (2, 6)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    result = intersect_zones_with_zones(
+        zones_a=zones_a,
+        zones_a_epsg=3857,
+        zones_b=zones_b,
+        zones_b_epsg=3857,
+    )
+
+    assert len(result) == 1
+    assert "zone_a_county_id" in result.columns
+    assert "zone_b_grid_id" in result.columns
+    assert result.iloc[0]["zone_a_county_id"] == "001"
+    assert result.iloc[0]["zone_b_grid_id"] == "cell-1"
+    assert result.iloc[0].geometry.geom_type in {"Polygon", "MultiPolygon"}
+    assert result.iloc[0].geometry.area == pytest.approx(4.0, abs=1e-6)
+
+
+def test_intersect_zones_with_zones_drops_line_or_point_only_touches():
+    zones_a = gpd.GeoDataFrame(
+        {
+            "county_id": ["001"],
+            "geometry": [Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones_b = gpd.GeoDataFrame(
+        {
+            "grid_id": ["cell-1"],
+            "geometry": [Polygon([(2, 0), (4, 0), (4, 2), (2, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    result = intersect_zones_with_zones(
+        zones_a=zones_a,
+        zones_a_epsg=3857,
+        zones_b=zones_b,
+        zones_b_epsg=3857,
+    )
+
+    assert len(result) == 0
+
+
+def test_intersect_zones_with_zones_saves_output(tmp_path):
+    zones_a = gpd.GeoDataFrame(
+        {
+            "county_id": ["001"],
+            "geometry": [Polygon([(0, 0), (4, 0), (4, 4), (0, 4)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones_b = gpd.GeoDataFrame(
+        {
+            "grid_id": ["cell-1"],
+            "geometry": [Polygon([(2, 2), (6, 2), (6, 6), (2, 6)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    output_path = tmp_path / "zone_overlap.geojson"
+
+    result = intersect_zones_with_zones(
+        zones_a=zones_a,
+        zones_a_epsg=3857,
+        zones_b=zones_b,
+        zones_b_epsg=3857,
+        output_path=output_path,
+    )
+
+    loaded = gpd.read_file(output_path)
+    assert output_path.exists()
+    assert len(result) == 1
+    assert len(loaded) == 1
+    assert loaded.iloc[0]["zone_a_county_id"] == "001"
+    assert loaded.iloc[0]["zone_b_grid_id"] == "cell-1"
+
+
+def test_intersect_zones_with_zones_loads_parquet_inputs(tmp_path):
+    zones_a = gpd.GeoDataFrame(
+        {
+            "county_id": ["001"],
+            "geometry": [Polygon([(0, 0), (4, 0), (4, 4), (0, 4)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones_b = gpd.GeoDataFrame(
+        {
+            "grid_id": ["cell-1"],
+            "geometry": [Polygon([(2, 2), (6, 2), (6, 6), (2, 6)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    try:
+        zones_a_path = tmp_path / "zones_a.parquet"
+        zones_b_path = tmp_path / "zones_b.parquet"
+        zones_a.to_parquet(zones_a_path, index=False)
+        zones_b.to_parquet(zones_b_path, index=False)
+    except ImportError:
+        pytest.skip("pyarrow is required for parquet zone intersection input test")
+
+    result = intersect_zones_with_zones(
+        zones_a=zones_a_path,
+        zones_a_epsg=3857,
+        zones_b=zones_b_path,
+        zones_b_epsg=3857,
+    )
+
+    assert len(result) == 1
+    assert result.iloc[0]["zone_a_county_id"] == "001"
+    assert result.iloc[0]["zone_b_grid_id"] == "cell-1"
+
+
+def test_intersect_zones_with_zones_distinguishes_land_and_whole_area_masks(monkeypatch):
+    counties = gpd.GeoDataFrame(
+        {
+            "GEOID": ["06001", "06013"],
+            "geometry": [
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(3, 0), (4, 0), (4, 1), (3, 1)]),
+            ],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    def _fake_collect_geographic_boundaries(**kwargs):
+        return counties
+
+    monkeypatch.setattr(
+        "osm_chordify.utils.data_collection.collect_geographic_boundaries",
+        _fake_collect_geographic_boundaries,
+    )
+
+    land_mask = build_area_mask_from_counties(
+        state_fips_code="06",
+        county_fips_codes=["001", "013"],
+        year=2020,
+        work_dir="/tmp/osm-chordify-test",
+        output_epsg=3857,
+        include_water=False,
+    )
+    whole_area_mask = build_area_mask_from_counties(
+        state_fips_code="06",
+        county_fips_codes=["001", "013"],
+        year=2020,
+        work_dir="/tmp/osm-chordify-test",
+        output_epsg=3857,
+        include_water=True,
+    )
+    gap_cell = gpd.GeoDataFrame(
+        {
+            "grid_id": ["gap-cell"],
+            "geometry": [Polygon([(1.5, 0.25), (2.5, 0.25), (2.5, 0.75), (1.5, 0.75)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    land_overlap = intersect_zones_with_zones(
+        zones_a=land_mask,
+        zones_a_epsg=3857,
+        zones_b=gap_cell,
+        zones_b_epsg=3857,
+    )
+    whole_area_overlap = intersect_zones_with_zones(
+        zones_a=whole_area_mask,
+        zones_a_epsg=3857,
+        zones_b=gap_cell,
+        zones_b_epsg=3857,
+    )
+
+    assert len(land_overlap) == 0
+    assert len(whole_area_overlap) == 1
+    assert whole_area_overlap.iloc[0]["zone_b_grid_id"] == "gap-cell"

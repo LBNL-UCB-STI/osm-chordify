@@ -53,6 +53,7 @@ from osm_chordify import (
     create_osm_highway_filter,
     intersect_road_network_with_county_zones,
     intersect_road_network_with_zones,
+    intersect_zones_with_zones,
     map_osm_with_beam_network,
     match_road_network_geometries,
 )
@@ -64,6 +65,7 @@ Core functions:
 - `build_osm_by_pop_density`: build a multi-layer OSM network from county / tract / CBG boundaries and density filters
 - `intersect_road_network_with_county_zones`: intersect a network with county polygons fetched by state/county FIPS codes
 - `intersect_road_network_with_zones`: intersect network edges with zone polygons
+- `intersect_zones_with_zones`: intersect one polygon zone layer with another
 - `map_osm_with_beam_network`: join BEAM network attributes onto OSM geometries
 - `match_road_network_geometries`: spatially match geometries across two road networks
 
@@ -118,6 +120,7 @@ See the [`examples/`](examples/) directory for complete, runnable scripts:
 | [`build_sfbay.py`](examples/build_sfbay.py) | Build OSM network for the SF Bay Area (9 counties) |
 | [`build_seattle.py`](examples/build_seattle.py) | Build OSM network for Seattle metro (4 counties + ferry) |
 | [`compare_osm_pbf.py`](examples/compare_osm_pbf.py) | Compare validation and diagnostics metrics across two built `.osm.pbf` artifacts |
+| [`intersect_zones.py`](examples/intersect_zones.py) | Intersect one polygon zone layer with another |
 | [`intersect_and_map_sfbay.py`](examples/intersect_and_map_sfbay.py) | Intersect OSM with polygon grid and map BEAM network |
 | [`diagnose_osm_pbf.py`](examples/diagnose_osm_pbf.py) | Validate and diagnose a built `.osm.pbf` artifact |
 

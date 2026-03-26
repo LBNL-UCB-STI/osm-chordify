@@ -12,6 +12,7 @@ from osm_chordify import (
     export_network,
     intersect_road_network_with_county_zones,
     intersect_road_network_with_zones,
+    intersect_zones_with_zones,
 )
 from osm_chordify.osm.graph import download_and_prepare_osm_network
 from osm_chordify.osm.intersect import load_osm_edges
@@ -27,6 +28,7 @@ def test_public_api_imports():
     assert callable(export_network)
     assert callable(intersect_road_network_with_county_zones)
     assert callable(intersect_road_network_with_zones)
+    assert callable(intersect_zones_with_zones)
     assert callable(download_and_prepare_osm_network)
 
 

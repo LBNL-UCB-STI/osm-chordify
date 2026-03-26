@@ -20,6 +20,7 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 LINE_GEOMETRY_TYPES = {"LineString", "MultiLineString"}
+POLYGON_GEOMETRY_TYPES = {"Polygon", "MultiPolygon"}
 INTERSECTION_CHUNK_SIZE = 50000
 
 
@@ -606,3 +607,60 @@ def intersect_road_network_with_zones(
         logger.info("Saved intersection to %s", output_path)
 
     return result_gdf
+
+
+def intersect_zones_with_zones(
+    zones_a,
+    zones_a_epsg,
+    zones_b,
+    zones_b_epsg,
+    output_path=None,
+    output_epsg=None,
+):
+    """Intersect one polygon zone set with another.
+
+    Parameters
+    ----------
+    zones_a : str, os.PathLike, or gpd.GeoDataFrame
+        First zone layer.
+    zones_a_epsg : int
+        EPSG code for the first zone layer CRS.
+    zones_b : str, os.PathLike, or gpd.GeoDataFrame
+        Second zone layer.
+    zones_b_epsg : int
+        EPSG code for the second zone layer CRS.
+    output_path : str, optional
+        If provided, save the result to this file.
+    output_epsg : int, optional
+        EPSG code for the output CRS. Defaults to ``zones_a_epsg``.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Polygon intersections with prefixed attributes from both inputs.
+    """
+    zones_a_gdf = _load_zones(zones_a)
+    zones_b_gdf = _load_zones(zones_b)
+
+    if output_epsg is None:
+        output_epsg = zones_a_epsg
+
+    zones_a_proj = _project_if_needed(zones_a_gdf, output_epsg)
+    zones_b_proj = _project_if_needed(zones_b_gdf, output_epsg if zones_b_epsg != output_epsg else zones_b_epsg)
+
+    a_cols = {col: f"zone_a_{col}" for col in zones_a_proj.columns if col != "geometry"}
+    b_cols = {col: f"zone_b_{col}" for col in zones_b_proj.columns if col != "geometry"}
+    zones_a_prefixed = zones_a_proj.rename(columns=a_cols)
+    zones_b_prefixed = zones_b_proj.rename(columns=b_cols)
+
+    result = gpd.overlay(zones_a_prefixed, zones_b_prefixed, how="intersection", keep_geom_type=False)
+    if len(result):
+        result = result.loc[result.geometry.geom_type.isin(POLYGON_GEOMETRY_TYPES)].copy()
+    else:
+        result = gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs=f"EPSG:{output_epsg}")
+
+    if output_path:
+        from osm_chordify.utils.io import save_geodataframe
+        save_geodataframe(result, output_path)
+
+    return result

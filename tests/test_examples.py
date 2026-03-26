@@ -171,6 +171,24 @@ def test_download_sfbay_masks_exposes_help():
     assert "--buffer-m" in result.stdout
 
 
+def test_intersect_zones_exposes_help():
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "examples/intersect_zones.py"), "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        "intersect_zones.py --help failed.\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "--output-epsg" in result.stdout
+    assert "--output-path" in result.stdout
+
+
 def test_main_module_exposes_cli_help():
     env = os.environ.copy()
     src_path = str(ROOT / "src")

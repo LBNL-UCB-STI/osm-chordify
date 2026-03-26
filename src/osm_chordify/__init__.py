@@ -8,6 +8,7 @@ __all__ = [
     "create_osm_highway_filter",
     "export_network",
     "intersect_road_network_with_zones",
+    "intersect_zones_with_zones",
     "map_osm_with_beam_network",
     "match_road_network_geometries",
     "diagnose_osm",
@@ -27,6 +28,10 @@ _EXPORTS = {
     "intersect_road_network_with_zones": (
         "osm_chordify.osm.intersect",
         "intersect_road_network_with_zones",
+    ),
+    "intersect_zones_with_zones": (
+        "osm_chordify.osm.intersect",
+        "intersect_zones_with_zones",
     ),
     "export_network": ("osm_chordify.osm.export", "export_network"),
     "create_osm_highway_filter": ("osm_chordify.utils.geo", "create_osm_highway_filter"),
