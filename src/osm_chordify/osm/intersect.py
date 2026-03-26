@@ -10,6 +10,7 @@ import logging
 import os
 import json
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import geopandas as gpd
 import pandas as pd
@@ -22,6 +23,9 @@ logger = logging.getLogger(__name__)
 LINE_GEOMETRY_TYPES = {"LineString", "MultiLineString"}
 POLYGON_GEOMETRY_TYPES = {"Polygon", "MultiPolygon"}
 INTERSECTION_CHUNK_SIZE = 50000
+COUNTY_BOUNDARY_SCREEN_CHUNK_SIZE = 100000
+PARALLEL_INTERSECTION_MIN_PAIRS = 200000
+MAX_INTERSECTION_WORKERS = min(8, os.cpu_count() or 1)
 
 
 def load_osm_edges(osm_gpkg_path):
@@ -458,6 +462,87 @@ def _prefilter_zones_to_network_bbox(polys_proj, edges_proj):
     return filtered
 
 
+def _chunk_slices(total, chunk_size):
+    """Yield slice boundaries for chunked processing."""
+    for start in range(0, total, chunk_size):
+        yield start, min(start + chunk_size, total)
+
+
+def _screen_crosses_boundary_chunk(geoms, boundary_union):
+    """Return boolean intersects(boundary_union) for one geometry chunk."""
+    return geoms.intersects(boundary_union)
+
+
+def _compute_chunk_worker(func, chunk, epsg, metric_names, length_col):
+    """Top-level worker wrapper for parallel chunk execution."""
+    if length_col is None:
+        return func(chunk, epsg, metric_names=metric_names)
+    return func(chunk, epsg, length_col, metric_names=metric_names)
+
+
+def _compute_chunked_exact_parts(
+    matched,
+    epsg,
+    compute_func,
+    desc,
+    postfix_template,
+    metric_names=None,
+    length_col=None,
+    enable_parallel=False,
+):
+    """Run chunked exact geometry processing, optionally in parallel."""
+    exact_parts = []
+    if not len(matched):
+        return exact_parts
+
+    total = len(matched)
+    chunk_specs = [(start, matched.iloc[start:end].copy()) for start, end in _chunk_slices(total, INTERSECTION_CHUNK_SIZE)]
+    use_parallel = enable_parallel and MAX_INTERSECTION_WORKERS > 1 and total >= PARALLEL_INTERSECTION_MIN_PAIRS
+
+    with tqdm(
+        total=total,
+        desc=desc,
+        unit="pair",
+        dynamic_ncols=True,
+        leave=True,
+        mininterval=0.5,
+    ) as pbar:
+        if use_parallel:
+            with ThreadPoolExecutor(max_workers=MAX_INTERSECTION_WORKERS) as executor:
+                futures = {
+                    executor.submit(
+                        _compute_chunk_worker,
+                        compute_func,
+                        chunk,
+                        epsg,
+                        metric_names,
+                        length_col,
+                    ): len(chunk)
+                    for _, chunk in chunk_specs
+                }
+                for future in as_completed(futures):
+                    chunk_result = future.result()
+                    if not chunk_result.empty:
+                        exact_parts.append(chunk_result)
+                    pbar.update(futures[future])
+                    pbar.set_postfix_str(postfix_template(sum(len(p) for p in exact_parts)))
+        else:
+            for _, chunk in chunk_specs:
+                chunk_result = _compute_chunk_worker(
+                    compute_func,
+                    chunk,
+                    epsg,
+                    metric_names,
+                    length_col,
+                )
+                if not chunk_result.empty:
+                    exact_parts.append(chunk_result)
+                pbar.update(len(chunk))
+                pbar.set_postfix_str(postfix_template(sum(len(p) for p in exact_parts)))
+
+    return exact_parts
+
+
 def intersect_road_network_with_zones(
     road_network,
     road_network_epsg,
@@ -552,7 +637,10 @@ def intersect_road_network_with_zones(
         logger.info("Using county fast path for non-boundary-crossing edges")
         boundaries = polys_indexed.geometry.boundary
         boundary_union = boundaries.union_all() if hasattr(boundaries, "union_all") else boundaries.unary_union
-        crosses_boundary = edges_indexed.geometry.intersects(boundary_union)
+        cross_masks = []
+        for start, end in _chunk_slices(len(edges_indexed), COUNTY_BOUNDARY_SCREEN_CHUNK_SIZE):
+            cross_masks.append(_screen_crosses_boundary_chunk(edges_indexed.geometry.iloc[start:end], boundary_union))
+        crosses_boundary = pd.concat(cross_masks, ignore_index=True) if cross_masks else pd.Series(dtype=bool)
         contained_edges = edges_indexed.loc[~crosses_boundary].copy()
         crossing_edges = edges_indexed.loc[crosses_boundary].copy()
 
@@ -640,24 +728,15 @@ def intersect_road_network_with_zones(
             on="__zone_idx",
             how="left",
         )
-
-        with tqdm(
-            total=len(matched),
+        exact_parts = _compute_chunked_exact_parts(
+            matched=matched,
+            epsg=road_network_epsg,
+            compute_func=_compute_intersection_chunk,
             desc="Computing intersections",
-            unit="pair",
-            dynamic_ncols=True,
-            leave=True,
-            mininterval=0.5,
-        ) as pbar:
-            for start in range(0, len(matched), INTERSECTION_CHUNK_SIZE):
-                chunk = matched.iloc[start:start + INTERSECTION_CHUNK_SIZE].copy()
-                chunk_result = _compute_intersection_chunk(chunk, road_network_epsg, metric_names=metric_names)
-                if not chunk_result.empty:
-                    exact_parts.append(chunk_result)
-                pbar.update(len(chunk))
-                pbar.set_postfix_str(
-                    f"hit_zones={hit_zones}, pieces={sum(len(p) for p in exact_parts)}, edge_hits={edge_hits}"
-                )
+            postfix_template=lambda pieces: f"hit_zones={hit_zones}, pieces={pieces}, edge_hits={edge_hits}",
+            metric_names=metric_names,
+            enable_parallel=_is_county_like_zones(polys_indexed),
+        )
 
     frames = []
     if direct_matches is not None and not direct_matches.empty:
@@ -1129,7 +1208,10 @@ def intersect_polygons_with_zones(
         logger.info("Using county fast path for non-boundary-crossing polygon pieces")
         boundaries = zones_indexed.geometry.boundary
         boundary_union = boundaries.union_all() if hasattr(boundaries, "union_all") else boundaries.unary_union
-        crosses_boundary = polygons_indexed.geometry.intersects(boundary_union)
+        cross_masks = []
+        for start, end in _chunk_slices(len(polygons_indexed), COUNTY_BOUNDARY_SCREEN_CHUNK_SIZE):
+            cross_masks.append(_screen_crosses_boundary_chunk(polygons_indexed.geometry.iloc[start:end], boundary_union))
+        crosses_boundary = pd.concat(cross_masks, ignore_index=True) if cross_masks else pd.Series(dtype=bool)
         contained_polygons = polygons_indexed.loc[~crosses_boundary].copy()
         crossing_polygons = polygons_indexed.loc[crosses_boundary].copy()
 
@@ -1216,28 +1298,16 @@ def intersect_polygons_with_zones(
 
     exact_parts = []
     if len(pairs):
-        with tqdm(
-            total=len(matched),
+        exact_parts = _compute_chunked_exact_parts(
+            matched=matched,
+            epsg=polygons_epsg,
+            compute_func=_compute_polygon_cascade_chunk,
             desc="Computing polygon intersections",
-            unit="pair",
-            dynamic_ncols=True,
-            leave=True,
-            mininterval=0.5,
-        ) as pbar:
-            for start in range(0, len(matched), INTERSECTION_CHUNK_SIZE):
-                chunk = matched.iloc[start:start + INTERSECTION_CHUNK_SIZE].copy()
-                chunk_result = _compute_polygon_cascade_chunk(
-                    chunk,
-                    polygons_epsg,
-                    piece_length_col,
-                    metric_names=metric_names,
-                )
-                if not chunk_result.empty:
-                    exact_parts.append(chunk_result)
-                pbar.update(len(chunk))
-                pbar.set_postfix_str(
-                    f"hit_zones={pairs['__zone_idx'].nunique()}, pieces={sum(len(p) for p in exact_parts)}, poly_hits={len(pairs)}"
-                )
+            postfix_template=lambda pieces: f"hit_zones={pairs['__zone_idx'].nunique()}, pieces={pieces}, poly_hits={len(pairs)}",
+            metric_names=metric_names,
+            length_col=piece_length_col,
+            enable_parallel=_is_county_like_zones(zones_indexed),
+        )
 
     frames = []
     if direct_matches is not None and not direct_matches.empty:
