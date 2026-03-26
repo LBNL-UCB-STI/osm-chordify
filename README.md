@@ -51,9 +51,11 @@ from osm_chordify import (
     build_area_mask_from_counties,
     build_osm_by_pop_density,
     create_osm_highway_filter,
+    intersect_polygons_with_zones,
     intersect_road_polygons_with_zones,
     intersect_road_network_with_county_zones,
     intersect_road_network_with_zones,
+    spatial_left_join_with_zones,
     intersect_zones_with_zones,
     map_osm_with_beam_network,
     match_road_network_geometries,
@@ -64,9 +66,11 @@ Core functions:
 
 - `build_area_mask_from_counties`: build a fused county-based land mask or whole-area mask from FIPS codes
 - `build_osm_by_pop_density`: build a multi-layer OSM network from county / tract / CBG boundaries and density filters
+- `intersect_polygons_with_zones`: cascade an already-intersected polygon layer into a new zone layer
 - `intersect_road_polygons_with_zones`: intersect polygon/rectangular road links with zones using area-based proportions
 - `intersect_road_network_with_county_zones`: intersect a network with county polygons fetched by state/county FIPS codes
 - `intersect_road_network_with_zones`: intersect network edges with zone polygons
+- `spatial_left_join_with_zones`: spatially left-join any geometry layer with zone attributes while keeping unmatched rows
 - `intersect_zones_with_zones`: intersect one polygon zone layer with another
 - `map_osm_with_beam_network`: join BEAM network attributes onto OSM geometries
 - `match_road_network_geometries`: spatially match geometries across two road networks
@@ -99,6 +103,20 @@ applying that proportion to the full link length column. By default it first
 filters zones to the overall road-network bounding box before exact
 intersection and shows the same `Filtering zones` progress bar used by the
 line-based workflow.
+
+For cascading polygon workflows, use:
+
+- `intersect_polygons_with_zones(...)`
+  - preserves all existing columns from the input polygon layer
+  - adds new zone attributes with `zone_*` prefixes
+  - computes current-step metrics:
+    - `zone_piece_proportion`
+    - `piece_link_length_m`
+    - `zone_piece_length_m`
+- `spatial_left_join_with_zones(...)`
+  - keeps all input rows
+  - appends zone attributes where matched
+  - leaves zone columns null where no zone intersects
 
 Mask generation semantics:
 

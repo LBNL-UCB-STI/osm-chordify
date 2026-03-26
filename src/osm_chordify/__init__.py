@@ -7,6 +7,7 @@ __all__ = [
     "build_area_mask_from_counties",
     "create_osm_highway_filter",
     "export_network",
+    "intersect_polygons_with_zones",
     "intersect_road_polygons_with_zones",
     "intersect_road_network_with_zones",
     "intersect_zones_with_zones",
@@ -14,6 +15,7 @@ __all__ = [
     "match_road_network_geometries",
     "diagnose_osm",
     "intersect_road_network_with_county_zones",
+    "spatial_left_join_with_zones",
 ]
 
 _EXPORTS = {
@@ -26,6 +28,10 @@ _EXPORTS = {
         "osm_chordify.main",
         "intersect_road_network_with_county_zones",
     ),
+    "intersect_polygons_with_zones": (
+        "osm_chordify.osm.intersect",
+        "intersect_polygons_with_zones",
+    ),
     "intersect_road_network_with_zones": (
         "osm_chordify.osm.intersect",
         "intersect_road_network_with_zones",
@@ -37,6 +43,10 @@ _EXPORTS = {
     "intersect_zones_with_zones": (
         "osm_chordify.osm.intersect",
         "intersect_zones_with_zones",
+    ),
+    "spatial_left_join_with_zones": (
+        "osm_chordify.osm.intersect",
+        "spatial_left_join_with_zones",
     ),
     "export_network": ("osm_chordify.osm.export", "export_network"),
     "create_osm_highway_filter": ("osm_chordify.utils.geo", "create_osm_highway_filter"),

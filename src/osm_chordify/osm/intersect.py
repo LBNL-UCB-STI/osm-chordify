@@ -626,6 +626,24 @@ def _infer_edge_length_col(gdf, edge_length_col=None):
     )
 
 
+def _infer_polygon_piece_length_col(gdf, piece_length_col=None):
+    """Resolve the source column used for cascade polygon-piece lengths."""
+    if piece_length_col is not None:
+        if piece_length_col not in gdf.columns:
+            raise ValueError(f"polygons are missing requested piece length column '{piece_length_col}'")
+        return piece_length_col
+
+    for candidate in ("zone_link_length_m", "edge_link_length_m", "edge_length_m", "edge_length", "length"):
+        if candidate in gdf.columns:
+            return candidate
+
+    raise ValueError(
+        "polygon cascade inputs must include a length column. "
+        "Pass piece_length_col explicitly or provide one of: "
+        "'zone_link_length_m', 'edge_link_length_m', 'edge_length_m', 'edge_length', 'length'."
+    )
+
+
 def _compute_polygon_intersection_chunk(chunk, crs, edge_length_col):
     """Compute polygon-road/zone overlap pieces using area-based proportions."""
     edge_geom_series = gpd.GeoSeries(chunk["edge_geometry"], crs=crs)
@@ -654,6 +672,89 @@ def _compute_polygon_intersection_chunk(chunk, crs, edge_length_col):
     chunk["zone_edge_proportion"] = proportions
     chunk["edge_link_length_m"] = full_lengths.round(2)
     chunk["zone_link_length_m"] = (full_lengths * proportions).round(2)
+    return chunk
+
+
+def _build_cascade_result_gdf(matched, polygon_attr_cols, zone_attr_cols, crs):
+    """Build a polygon-cascade result while preserving existing polygon columns."""
+    result_data = {col: matched[col] for col in polygon_attr_cols}
+    result_data["zone_piece_proportion"] = matched["zone_piece_proportion"]
+    result_data["piece_link_length_m"] = matched["piece_link_length_m"]
+    result_data["zone_piece_length_m"] = matched["zone_piece_length_m"]
+    result_data["geometry"] = matched["geometry"]
+
+    result_cols = list(polygon_attr_cols) + [
+        "zone_piece_proportion",
+        "piece_link_length_m",
+        "zone_piece_length_m",
+        "geometry",
+    ]
+    existing_keys = set(result_cols)
+
+    for col in zone_attr_cols:
+        out_col = _zone_output_name(col, existing_keys)
+        result_data[out_col] = matched[col]
+        if out_col not in result_cols:
+            result_cols.append(out_col)
+            existing_keys.add(out_col)
+
+    return gpd.GeoDataFrame(result_data, geometry="geometry", crs=crs)[result_cols]
+
+
+def _build_cascade_void_rows(zones, polygon_attr_cols, zone_attr_cols, crs):
+    """Build placeholder rows for zones kept by bbox prefilter with no polygon matches."""
+    result_data = {col: [pd.NA] * len(zones) for col in polygon_attr_cols}
+    result_data["zone_piece_proportion"] = [pd.NA] * len(zones)
+    result_data["piece_link_length_m"] = [pd.NA] * len(zones)
+    result_data["zone_piece_length_m"] = [pd.NA] * len(zones)
+    result_data["geometry"] = [GeometryCollection() for _ in range(len(zones))]
+
+    result_cols = list(polygon_attr_cols) + [
+        "zone_piece_proportion",
+        "piece_link_length_m",
+        "zone_piece_length_m",
+        "geometry",
+    ]
+    existing_keys = set(result_cols)
+
+    for col in zone_attr_cols:
+        out_col = _zone_output_name(col, existing_keys)
+        result_data[out_col] = zones[col].tolist()
+        if out_col not in result_cols:
+            result_cols.append(out_col)
+            existing_keys.add(out_col)
+
+    return gpd.GeoDataFrame(result_data, geometry="geometry", crs=crs)[result_cols]
+
+
+def _compute_polygon_cascade_chunk(chunk, crs, piece_length_col):
+    """Compute exact polygon/polygon overlaps for cascading zone intersections."""
+    polygon_geom_series = gpd.GeoSeries(chunk["polygon_geometry"], crs=crs)
+    zone_geom_series = gpd.GeoSeries(chunk["zone_geometry"], crs=crs)
+    intersection_series = gpd.GeoSeries(polygon_geom_series.intersection(zone_geom_series), crs=crs)
+    nonempty_mask = ~intersection_series.is_empty
+    polygon_mask = intersection_series.geom_type.isin(POLYGON_GEOMETRY_TYPES)
+    chunk = chunk.loc[nonempty_mask & polygon_mask].copy()
+    if chunk.empty:
+        return chunk
+
+    intersection_series = intersection_series.loc[nonempty_mask & polygon_mask]
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Geometry is in a geographic CRS.*",
+            category=UserWarning,
+        )
+        polygon_areas = polygon_geom_series.loc[chunk.index].area.round(2)
+        overlap_areas = intersection_series.area.round(2)
+
+    proportions = (overlap_areas / polygon_areas).where(polygon_areas > 0, 0).round(4)
+    piece_lengths = pd.to_numeric(chunk[piece_length_col], errors="coerce").round(2)
+
+    chunk["geometry"] = intersection_series
+    chunk["zone_piece_proportion"] = proportions
+    chunk["piece_link_length_m"] = piece_lengths
+    chunk["zone_piece_length_m"] = (piece_lengths * proportions).round(2)
     return chunk
 
 
@@ -785,6 +886,195 @@ def intersect_road_polygons_with_zones(
         save_geodataframe(result_gdf, output_path)
         _write_intersection_cache_metadata(output_path, {**cache_metadata, "polygon_mode": True, "edge_length_col": length_col})
         logger.info("Saved polygon-road intersection to %s", output_path)
+
+    return result_gdf
+
+
+def intersect_polygons_with_zones(
+    polygons,
+    polygons_epsg,
+    zones,
+    output_path=None,
+    output_epsg=None,
+    prefilter_zones_to_network_bbox=True,
+    piece_length_col=None,
+):
+    """Intersect an already-processed polygon layer with a new zone layer.
+
+    Existing polygon-layer columns are preserved as-is. New zone attributes are
+    added with prefixed names. The current-step metrics are:
+    - ``zone_piece_proportion``: overlap area / full source polygon area
+    - ``piece_link_length_m``: source polygon piece length
+    - ``zone_piece_length_m``: derived in-zone length based on the proportion
+    """
+    _require_projected_epsg(polygons_epsg)
+    polygons_gdf = _load_zones(polygons)
+    zones_gdf = _load_zones(zones)
+
+    if output_epsg is None:
+        output_epsg = polygons_epsg
+
+    piece_length_col = _infer_polygon_piece_length_col(polygons_gdf, piece_length_col=piece_length_col)
+    cache_metadata = _intersection_cache_metadata(
+        road_network=polygons,
+        road_network_epsg=polygons_epsg,
+        zones=zones,
+        output_epsg=output_epsg,
+        prefilter_zones_to_network_bbox=prefilter_zones_to_network_bbox,
+    )
+    cascade_cache_metadata = {**cache_metadata, "cascade_polygon_mode": True, "piece_length_col": piece_length_col}
+    cached_result = _try_load_cached_intersection(output_path, cascade_cache_metadata)
+    if cached_result is not None:
+        return cached_result
+
+    logger.info("Projecting geometries to EPSG:%d", polygons_epsg)
+    polygons_proj = _project_if_needed(polygons_gdf, polygons_epsg)
+    zones_proj = _project_if_needed(zones_gdf, polygons_epsg)
+
+    if prefilter_zones_to_network_bbox and len(zones_proj):
+        zones_proj = _prefilter_zones_to_network_bbox(zones_proj, polygons_proj)
+
+    polygon_attr_cols = [c for c in polygons_gdf.columns if c != "geometry"]
+    zone_attr_cols = [c for c in zones_gdf.columns if c != "geometry"]
+
+    logger.info("Intersecting %d zones with %d polygon pieces", len(zones_proj), len(polygons_proj))
+    polygons_indexed = polygons_proj.reset_index(drop=True).reset_index(names="__poly_idx")
+    zones_indexed = zones_proj.reset_index(drop=True).reset_index(names="__zone_idx")
+
+    pairs = gpd.sjoin(
+        polygons_indexed[["__poly_idx", "geometry"]],
+        zones_indexed[["__zone_idx", "geometry"]],
+        how="inner",
+        predicate="intersects",
+    )
+    pairs = pairs.rename(columns={"geometry": "polygon_geometry"}).drop(columns=["index_right"])
+
+    if len(pairs) == 0:
+        if prefilter_zones_to_network_bbox and len(zones_proj):
+            voided = _build_cascade_void_rows(zones_indexed, polygon_attr_cols, zone_attr_cols, output_epsg)
+            if output_path:
+                from osm_chordify.utils.io import save_geodataframe
+                save_geodataframe(voided, output_path)
+                _write_intersection_cache_metadata(output_path, cascade_cache_metadata)
+            return voided
+        return gpd.GeoDataFrame(
+            columns=list(polygon_attr_cols) + ["zone_piece_proportion", "piece_link_length_m", "zone_piece_length_m", "geometry"],
+            geometry="geometry",
+            crs=output_epsg,
+        )
+
+    matched = pairs.merge(
+        polygons_indexed.drop(columns=["geometry"]),
+        on="__poly_idx",
+        how="left",
+    ).merge(
+        zones_indexed.rename(columns={"geometry": "zone_geometry"}),
+        on="__zone_idx",
+        how="left",
+    )
+
+    exact_parts = []
+    with tqdm(
+        total=len(matched),
+        desc="Computing polygon intersections",
+        unit="pair",
+        dynamic_ncols=True,
+        leave=True,
+        mininterval=0.5,
+    ) as pbar:
+        for start in range(0, len(matched), INTERSECTION_CHUNK_SIZE):
+            chunk = matched.iloc[start:start + INTERSECTION_CHUNK_SIZE].copy()
+            chunk_result = _compute_polygon_cascade_chunk(chunk, polygons_epsg, piece_length_col)
+            if not chunk_result.empty:
+                exact_parts.append(chunk_result)
+            pbar.update(len(chunk))
+            pbar.set_postfix_str(
+                f"hit_zones={pairs['__zone_idx'].nunique()}, pieces={sum(len(p) for p in exact_parts)}, poly_hits={len(pairs)}"
+            )
+
+    if not exact_parts:
+        return gpd.GeoDataFrame(
+            columns=list(polygon_attr_cols) + ["zone_piece_proportion", "piece_link_length_m", "zone_piece_length_m", "geometry"],
+            geometry="geometry",
+            crs=output_epsg,
+        )
+
+    matched_all = gpd.GeoDataFrame(pd.concat(exact_parts, ignore_index=True), geometry="geometry", crs=polygons_epsg)
+    result_gdf = _build_cascade_result_gdf(matched_all, polygon_attr_cols, zone_attr_cols, polygons_epsg)
+    if prefilter_zones_to_network_bbox and "__zone_idx" in matched_all.columns:
+        matched_zone_indices = set(matched_all["__zone_idx"].unique())
+        missing_zone_rows = zones_indexed.loc[~zones_indexed["__zone_idx"].isin(matched_zone_indices)]
+        if len(missing_zone_rows):
+            voided = _build_cascade_void_rows(missing_zone_rows, polygon_attr_cols, zone_attr_cols, polygons_epsg)
+            result_gdf = gpd.GeoDataFrame(pd.concat([result_gdf, voided], ignore_index=True), geometry="geometry", crs=polygons_epsg)
+
+    if output_epsg != polygons_epsg:
+        result_gdf = result_gdf.to_crs(epsg=output_epsg)
+
+    if output_path:
+        from osm_chordify.utils.io import save_geodataframe
+        save_geodataframe(result_gdf, output_path)
+        _write_intersection_cache_metadata(output_path, cascade_cache_metadata)
+        logger.info("Saved polygon cascade intersection to %s", output_path)
+
+    return result_gdf
+
+
+def spatial_left_join_with_zones(
+    gdf,
+    gdf_epsg,
+    zones,
+    output_path=None,
+    output_epsg=None,
+):
+    """Spatially left-join a geometry layer with zone polygons.
+
+    All rows from *gdf* are preserved. Zone attributes are appended with
+    prefixed names and remain null where no zone intersects the input geometry.
+    """
+    _require_projected_epsg(gdf_epsg)
+    input_gdf = _load_zones(gdf)
+    zones_gdf = _load_zones(zones)
+
+    if output_epsg is None:
+        output_epsg = gdf_epsg
+
+    logger.info("Projecting geometries to EPSG:%d", gdf_epsg)
+    input_proj = _project_if_needed(input_gdf, gdf_epsg)
+    zones_proj = _project_if_needed(zones_gdf, gdf_epsg)
+
+    input_attr_cols = [c for c in input_gdf.columns if c != "geometry"]
+    zone_attr_cols = [c for c in zones_gdf.columns if c != "geometry"]
+    input_indexed = input_proj.reset_index(drop=True).reset_index(names="__input_idx")
+    zones_indexed = zones_proj.reset_index(drop=True).reset_index(names="__zone_idx")
+
+    joined = gpd.sjoin(
+        input_indexed,
+        zones_indexed[["__zone_idx", "geometry"] + zone_attr_cols],
+        how="left",
+        predicate="intersects",
+    ).drop(columns=["index_right"])
+
+    result_data = {col: joined[col] for col in input_attr_cols}
+    result_data["geometry"] = joined["geometry"]
+    result_cols = list(input_attr_cols) + ["geometry"]
+    existing_keys = set(result_cols)
+
+    for col in zone_attr_cols:
+        out_col = _zone_output_name(col, existing_keys)
+        result_data[out_col] = joined[col]
+        if out_col not in result_cols:
+            result_cols.append(out_col)
+            existing_keys.add(out_col)
+
+    result_gdf = gpd.GeoDataFrame(result_data, geometry="geometry", crs=gdf_epsg)[result_cols]
+    if output_epsg != gdf_epsg:
+        result_gdf = result_gdf.to_crs(epsg=output_epsg)
+
+    if output_path:
+        from osm_chordify.utils.io import save_geodataframe
+        save_geodataframe(result_gdf, output_path)
+        logger.info("Saved spatial left join to %s", output_path)
 
     return result_gdf
 

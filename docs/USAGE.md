@@ -173,6 +173,42 @@ Behavior:
 - `zone_link_length_m` is computed as:
   - `edge_link_length_m * zone_edge_proportion`
 
+For cascading polygon overlays, for example:
+
+1. rectangular network x inMAP grid
+2. result x AERMOD grid
+3. result left-joined with counties
+
+use these helpers:
+
+```python
+from osm_chordify import intersect_polygons_with_zones, spatial_left_join_with_zones
+
+b = intersect_polygons_with_zones(
+    polygons=a,
+    polygons_epsg=26910,
+    zones="./output/grid/aermod_grid.shp",
+    output_path="./output/grid/inmap_aermod_overlap.parquet",
+)
+
+c = spatial_left_join_with_zones(
+    gdf=b,
+    gdf_epsg=26910,
+    zones="./output/geo/counties.parquet",
+    output_path="./output/grid/inmap_aermod_county.parquet",
+)
+```
+
+`intersect_polygons_with_zones(...)` preserves all existing polygon-layer
+columns, adds new `zone_*` columns for the new zone layer, and computes:
+
+- `zone_piece_proportion`
+- `piece_link_length_m`
+- `zone_piece_length_m`
+
+`spatial_left_join_with_zones(...)` preserves all rows from the input layer and
+leaves zone columns null when there is no spatial match.
+
 `area_name` only controls the cached boundary filename; the actual county
 selection comes from `state_fips_code` and `county_fips_codes`. County
 boundaries are cached in the requested intersection CRS, so

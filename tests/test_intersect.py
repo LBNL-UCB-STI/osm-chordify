@@ -6,8 +6,10 @@ import json
 
 from osm_chordify.main import build_area_mask_from_counties, intersect_road_network_with_county_zones
 from osm_chordify.osm.intersect import (
+    intersect_polygons_with_zones,
     intersect_road_network_with_zones,
     intersect_road_polygons_with_zones,
+    spatial_left_join_with_zones,
     intersect_zones_with_zones,
 )
 
@@ -613,6 +615,75 @@ def test_intersect_road_polygons_with_zones_prefilters_to_bbox_by_default(monkey
 
     assert len(result) == 1
     assert calls["count"] == 1
+
+
+def test_intersect_polygons_with_zones_preserves_existing_columns_and_recomputes_piece_metrics():
+    polygons = gpd.GeoDataFrame(
+        {
+            "edge_osm_id": [1],
+            "zone_NAME": ["inmap-cell-1"],
+            "zone_link_length_m": [10.0],
+            "geometry": [Polygon([(0, 0), (10, 0), (10, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "aermod_id": ["a1"],
+            "geometry": [Polygon([(0, 0), (5, 0), (5, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    result = intersect_polygons_with_zones(
+        polygons=polygons,
+        polygons_epsg=3857,
+        zones=zones,
+    )
+
+    assert len(result) == 1
+    assert result.iloc[0]["edge_osm_id"] == 1
+    assert result.iloc[0]["zone_NAME"] == "inmap-cell-1"
+    assert result.iloc[0]["zone_aermod_id"] == "a1"
+    assert result.iloc[0]["piece_link_length_m"] == pytest.approx(10.0, abs=1e-6)
+    assert result.iloc[0]["zone_piece_proportion"] == pytest.approx(0.5, abs=1e-6)
+    assert result.iloc[0]["zone_piece_length_m"] == pytest.approx(5.0, abs=1e-6)
+
+
+def test_spatial_left_join_with_zones_keeps_unmatched_rows_with_null_zone_fields():
+    pieces = gpd.GeoDataFrame(
+        {
+            "piece_id": [1, 2],
+            "geometry": [
+                Polygon([(0, 0), (2, 0), (2, 2), (0, 2)]),
+                Polygon([(10, 10), (12, 10), (12, 12), (10, 12)]),
+            ],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    counties = gpd.GeoDataFrame(
+        {
+            "COUNTYFP": ["001"],
+            "geometry": [Polygon([(0, 0), (3, 0), (3, 3), (0, 3)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    result = spatial_left_join_with_zones(
+        gdf=pieces,
+        gdf_epsg=3857,
+        zones=counties,
+    )
+
+    assert len(result) == 2
+    matched = result[result["piece_id"] == 1].iloc[0]
+    unmatched = result[result["piece_id"] == 2].iloc[0]
+    assert matched["zone_COUNTYFP"] == "001"
+    assert pd.isna(unmatched["zone_COUNTYFP"])
 
 
 def test_intersection_preserves_prior_prefixed_columns_without_edge_stacking():
