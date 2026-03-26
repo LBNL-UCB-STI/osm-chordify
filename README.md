@@ -108,14 +108,14 @@ For cascading polygon workflows, use:
 
 - `intersect_polygons_with_zones(...)`
   - preserves all existing columns from the input polygon layer
-  - adds new zone attributes with `zone_*` prefixes
+  - adds new zone attributes with a label prefix such as `inmap_*` or `aermod_*`
   - computes current-step metrics:
-    - `zone_piece_proportion`
-    - `piece_link_length_m`
-    - `zone_piece_length_m`
+    - `<label>_zone_piece_proportion`
+    - `<label>_piece_link_length_m`
+    - `<label>_zone_piece_length_m`
 - `spatial_left_join_with_zones(...)`
   - keeps all input rows
-  - appends zone attributes where matched
+  - appends zone attributes where matched, using a label prefix such as `county_*`
   - leaves zone columns null where no zone intersects
 
 Mask generation semantics:

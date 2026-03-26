@@ -188,6 +188,7 @@ b = intersect_polygons_with_zones(
     polygons=a,
     polygons_epsg=26910,
     zones="./output/grid/aermod_grid.shp",
+    zone_label="aermod",
     output_path="./output/grid/inmap_aermod_overlap.parquet",
 )
 
@@ -195,19 +196,20 @@ c = spatial_left_join_with_zones(
     gdf=b,
     gdf_epsg=26910,
     zones="./output/geo/counties.parquet",
+    zone_label="county",
     output_path="./output/grid/inmap_aermod_county.parquet",
 )
 ```
 
 `intersect_polygons_with_zones(...)` preserves all existing polygon-layer
-columns, adds new `zone_*` columns for the new zone layer, and computes:
+columns, adds new `<label>_*` columns for the new zone layer, and computes:
 
-- `zone_piece_proportion`
-- `piece_link_length_m`
-- `zone_piece_length_m`
+- `<label>_zone_piece_proportion`
+- `<label>_piece_link_length_m`
+- `<label>_zone_piece_length_m`
 
 `spatial_left_join_with_zones(...)` preserves all rows from the input layer and
-leaves zone columns null when there is no spatial match.
+leaves labeled zone columns null when there is no spatial match.
 
 `area_name` only controls the cached boundary filename; the actual county
 selection comes from `state_fips_code` and `county_fips_codes`. County

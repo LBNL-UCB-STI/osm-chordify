@@ -502,13 +502,17 @@ def test_intersect_road_polygons_with_zones_uses_area_proportion_to_derive_lengt
         road_network=road_polygons,
         road_network_epsg=3857,
         zones=zones,
+        zone_label="aermod",
     )
 
     assert len(result) == 1
-    assert result.iloc[0]["zone_edge_proportion"] == pytest.approx(0.5, abs=1e-6)
-    assert result.iloc[0]["edge_link_length_m"] == pytest.approx(10.0, abs=1e-6)
-    assert result.iloc[0]["zone_link_length_m"] == pytest.approx(5.0, abs=1e-6)
+    assert result.iloc[0]["aermod_zone_edge_proportion"] == pytest.approx(0.5, abs=1e-6)
+    assert result.iloc[0]["aermod_edge_link_length_m"] == pytest.approx(10.0, abs=1e-6)
+    assert result.iloc[0]["aermod_zone_link_length_m"] == pytest.approx(5.0, abs=1e-6)
+    assert result.iloc[0]["aermod_edge_surface_m2"] == pytest.approx(20.0, abs=1e-6)
+    assert result.iloc[0]["aermod_zone_surface_m2"] == pytest.approx(10.0, abs=1e-6)
     assert result.iloc[0].geometry.geom_type in {"Polygon", "MultiPolygon"}
+    assert result.iloc[0]["aermod_zone_id"] == "left-half"
 
 
 def test_intersect_road_polygons_with_zones_drops_boundary_only_touches():
@@ -641,15 +645,18 @@ def test_intersect_polygons_with_zones_preserves_existing_columns_and_recomputes
         polygons=polygons,
         polygons_epsg=3857,
         zones=zones,
+        zone_label="inmap",
     )
 
     assert len(result) == 1
     assert result.iloc[0]["edge_osm_id"] == 1
     assert result.iloc[0]["zone_NAME"] == "inmap-cell-1"
-    assert result.iloc[0]["zone_aermod_id"] == "a1"
-    assert result.iloc[0]["piece_link_length_m"] == pytest.approx(10.0, abs=1e-6)
-    assert result.iloc[0]["zone_piece_proportion"] == pytest.approx(0.5, abs=1e-6)
-    assert result.iloc[0]["zone_piece_length_m"] == pytest.approx(5.0, abs=1e-6)
+    assert result.iloc[0]["inmap_aermod_id"] == "a1"
+    assert result.iloc[0]["inmap_piece_link_length_m"] == pytest.approx(10.0, abs=1e-6)
+    assert result.iloc[0]["inmap_zone_piece_proportion"] == pytest.approx(0.5, abs=1e-6)
+    assert result.iloc[0]["inmap_zone_piece_length_m"] == pytest.approx(5.0, abs=1e-6)
+    assert result.iloc[0]["inmap_piece_surface_m2"] == pytest.approx(20.0, abs=1e-6)
+    assert result.iloc[0]["inmap_zone_surface_m2"] == pytest.approx(10.0, abs=1e-6)
 
 
 def test_spatial_left_join_with_zones_keeps_unmatched_rows_with_null_zone_fields():
@@ -677,13 +684,14 @@ def test_spatial_left_join_with_zones_keeps_unmatched_rows_with_null_zone_fields
         gdf=pieces,
         gdf_epsg=3857,
         zones=counties,
+        zone_label="county",
     )
 
     assert len(result) == 2
     matched = result[result["piece_id"] == 1].iloc[0]
     unmatched = result[result["piece_id"] == 2].iloc[0]
-    assert matched["zone_COUNTYFP"] == "001"
-    assert pd.isna(unmatched["zone_COUNTYFP"])
+    assert matched["county_COUNTYFP"] == "001"
+    assert pd.isna(unmatched["county_COUNTYFP"])
 
 
 def test_intersection_preserves_prior_prefixed_columns_without_edge_stacking():
