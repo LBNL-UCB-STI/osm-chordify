@@ -151,6 +151,28 @@ Zones that survive the bbox prefilter but contain no intersecting link pieces
 are retained instead of being dropped; the fixed numeric intersection columns
 remain null for those rows.
 
+For rectangular or polygon road links, use
+`intersect_road_polygons_with_zones(...)` instead of the line-based function:
+
+```python
+result = intersect_road_polygons_with_zones(
+    road_network="./output/network/network_rectangles.parquet",
+    road_network_epsg=26910,
+    zones="./output/grid/fineMesh100m.shp",
+    output_path="./output/grid/network-grid-polygon-intersection.parquet",
+)
+```
+
+Behavior:
+
+- input road geometry is polygonal (for example rectangular links)
+- zones are first filtered to the overall road-network bounding box by default
+  before exact polygon intersection, using the `Filtering zones` progress bar
+- `zone_edge_proportion` is overlap area divided by total road-link area
+- `edge_link_length_m` is taken from the full-link length column
+- `zone_link_length_m` is computed as:
+  - `edge_link_length_m * zone_edge_proportion`
+
 `area_name` only controls the cached boundary filename; the actual county
 selection comes from `state_fips_code` and `county_fips_codes`. County
 boundaries are cached in the requested intersection CRS, so

@@ -2,9 +2,14 @@ import geopandas as gpd
 import pandas as pd
 import pytest
 from shapely.geometry import LineString, Point, Polygon
+import json
 
 from osm_chordify.main import build_area_mask_from_counties, intersect_road_network_with_county_zones
-from osm_chordify.osm.intersect import intersect_road_network_with_zones, intersect_zones_with_zones
+from osm_chordify.osm.intersect import (
+    intersect_road_network_with_zones,
+    intersect_road_polygons_with_zones,
+    intersect_zones_with_zones,
+)
 
 
 def test_intersection_includes_fixed_length_and_zone_edge_proportion_columns():
@@ -470,6 +475,144 @@ def test_intersection_drops_point_only_boundary_touches():
     )
 
     assert len(result) == 0
+
+
+def test_intersect_road_polygons_with_zones_uses_area_proportion_to_derive_length():
+    road_polygons = gpd.GeoDataFrame(
+        {
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [Polygon([(0, 0), (10, 0), (10, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["left-half"],
+            "geometry": [Polygon([(0, 0), (5, 0), (5, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    result = intersect_road_polygons_with_zones(
+        road_network=road_polygons,
+        road_network_epsg=3857,
+        zones=zones,
+    )
+
+    assert len(result) == 1
+    assert result.iloc[0]["zone_edge_proportion"] == pytest.approx(0.5, abs=1e-6)
+    assert result.iloc[0]["edge_link_length_m"] == pytest.approx(10.0, abs=1e-6)
+    assert result.iloc[0]["zone_link_length_m"] == pytest.approx(5.0, abs=1e-6)
+    assert result.iloc[0].geometry.geom_type in {"Polygon", "MultiPolygon"}
+
+
+def test_intersect_road_polygons_with_zones_drops_boundary_only_touches():
+    road_polygons = gpd.GeoDataFrame(
+        {
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [Polygon([(0, 0), (10, 0), (10, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["touch-only"],
+            "geometry": [Polygon([(10, 0), (12, 0), (12, 2), (10, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    result = intersect_road_polygons_with_zones(
+        road_network=road_polygons,
+        road_network_epsg=3857,
+        zones=zones,
+    )
+
+    assert len(result) == 0
+
+
+def test_intersect_road_polygons_with_zones_prefilter_keeps_void_rows():
+    road_polygons = gpd.GeoDataFrame(
+        {
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [Polygon([(0, 0), (10, 0), (10, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["hit", "voided", "outside"],
+            "geometry": [
+                Polygon([(0, 0), (5, 0), (5, 2), (0, 2)]),
+                Polygon([(0, 2), (5, 2), (5, 4), (0, 4)]),
+                Polygon([(100, 100), (105, 100), (105, 105), (100, 105)]),
+            ],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    result = intersect_road_polygons_with_zones(
+        road_network=road_polygons,
+        road_network_epsg=3857,
+        zones=zones,
+        prefilter_zones_to_network_bbox=True,
+    )
+
+    assert set(result["zone_zone_id"]) == {"hit", "voided"}
+    voided = result[result["zone_zone_id"] == "voided"].iloc[0]
+    assert pd.isna(voided["zone_edge_proportion"])
+    assert pd.isna(voided["edge_link_length_m"])
+    assert pd.isna(voided["zone_link_length_m"])
+
+
+def test_intersect_road_polygons_with_zones_prefilters_to_bbox_by_default(monkeypatch):
+    road_polygons = gpd.GeoDataFrame(
+        {
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [Polygon([(0, 0), (10, 0), (10, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["hit"],
+            "geometry": [Polygon([(0, 0), (5, 0), (5, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    calls = {}
+    original = __import__("osm_chordify.osm.intersect", fromlist=["_prefilter_zones_to_network_bbox"])._prefilter_zones_to_network_bbox
+
+    def _wrapped_prefilter(polys_proj, edges_proj):
+        calls["count"] = calls.get("count", 0) + 1
+        return original(polys_proj, edges_proj)
+
+    monkeypatch.setattr(
+        "osm_chordify.osm.intersect._prefilter_zones_to_network_bbox",
+        _wrapped_prefilter,
+    )
+
+    result = intersect_road_polygons_with_zones(
+        road_network=road_polygons,
+        road_network_epsg=3857,
+        zones=zones,
+    )
+
+    assert len(result) == 1
+    assert calls["count"] == 1
 
 
 def test_intersection_preserves_prior_prefixed_columns_without_edge_stacking():

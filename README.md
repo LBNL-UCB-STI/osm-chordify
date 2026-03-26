@@ -51,6 +51,7 @@ from osm_chordify import (
     build_area_mask_from_counties,
     build_osm_by_pop_density,
     create_osm_highway_filter,
+    intersect_road_polygons_with_zones,
     intersect_road_network_with_county_zones,
     intersect_road_network_with_zones,
     intersect_zones_with_zones,
@@ -63,6 +64,7 @@ Core functions:
 
 - `build_area_mask_from_counties`: build a fused county-based land mask or whole-area mask from FIPS codes
 - `build_osm_by_pop_density`: build a multi-layer OSM network from county / tract / CBG boundaries and density filters
+- `intersect_road_polygons_with_zones`: intersect polygon/rectangular road links with zones using area-based proportions
 - `intersect_road_network_with_county_zones`: intersect a network with county polygons fetched by state/county FIPS codes
 - `intersect_road_network_with_zones`: intersect network edges with zone polygons
 - `intersect_zones_with_zones`: intersect one polygon zone layer with another
@@ -89,6 +91,14 @@ This reduces the zone set before exact intersection and shows a dedicated
 `Filtering zones` progress bar. Zones kept by the bounding-box prefilter that
 still contain no intersecting link pieces are preserved instead of being
 dropped; the fixed numeric intersection columns remain null for those rows.
+
+For rectangular/polygon road links, use
+`intersect_road_polygons_with_zones(...)` instead. That variant computes
+`zone_edge_proportion` from overlap area and derives `zone_link_length_m` by
+applying that proportion to the full link length column. By default it first
+filters zones to the overall road-network bounding box before exact
+intersection and shows the same `Filtering zones` progress bar used by the
+line-based workflow.
 
 Mask generation semantics:
 

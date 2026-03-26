@@ -7,6 +7,7 @@ __all__ = [
     "build_area_mask_from_counties",
     "create_osm_highway_filter",
     "export_network",
+    "intersect_road_polygons_with_zones",
     "intersect_road_network_with_zones",
     "intersect_zones_with_zones",
     "map_osm_with_beam_network",
@@ -28,6 +29,10 @@ _EXPORTS = {
     "intersect_road_network_with_zones": (
         "osm_chordify.osm.intersect",
         "intersect_road_network_with_zones",
+    ),
+    "intersect_road_polygons_with_zones": (
+        "osm_chordify.osm.intersect",
+        "intersect_road_polygons_with_zones",
     ),
     "intersect_zones_with_zones": (
         "osm_chordify.osm.intersect",

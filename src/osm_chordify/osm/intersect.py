@@ -411,7 +411,6 @@ def intersect_road_network_with_zones(
     prefilter_zones_to_network_bbox : bool, optional
         If ``True``, keep only zones that intersect the overall road-network
         bounding box before exact intersection.
-
     Returns
     -------
     gpd.GeoDataFrame
@@ -605,6 +604,187 @@ def intersect_road_network_with_zones(
         save_geodataframe(result_gdf, output_path)
         _write_intersection_cache_metadata(output_path, cache_metadata)
         logger.info("Saved intersection to %s", output_path)
+
+    return result_gdf
+
+
+def _infer_edge_length_col(gdf, edge_length_col=None):
+    """Resolve the source column used for full-link length values."""
+    if edge_length_col is not None:
+        if edge_length_col not in gdf.columns:
+            raise ValueError(f"road_network is missing requested edge length column '{edge_length_col}'")
+        return edge_length_col
+
+    for candidate in ("edge_link_length_m", "edge_length_m", "edge_length", "length"):
+        if candidate in gdf.columns:
+            return candidate
+
+    raise ValueError(
+        "road_network polygon inputs must include a length column. "
+        "Pass edge_length_col explicitly or provide one of: "
+        "'edge_link_length_m', 'edge_length_m', 'edge_length', 'length'."
+    )
+
+
+def _compute_polygon_intersection_chunk(chunk, crs, edge_length_col):
+    """Compute polygon-road/zone overlap pieces using area-based proportions."""
+    edge_geom_series = gpd.GeoSeries(chunk["edge_geometry"], crs=crs)
+    zone_geom_series = gpd.GeoSeries(chunk["zone_geometry"], crs=crs)
+    intersection_series = gpd.GeoSeries(edge_geom_series.intersection(zone_geom_series), crs=crs)
+    nonempty_mask = ~intersection_series.is_empty
+    polygon_mask = intersection_series.geom_type.isin(POLYGON_GEOMETRY_TYPES)
+    chunk = chunk.loc[nonempty_mask & polygon_mask].copy()
+    if chunk.empty:
+        return chunk
+
+    intersection_series = intersection_series.loc[nonempty_mask & polygon_mask]
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Geometry is in a geographic CRS.*",
+            category=UserWarning,
+        )
+        edge_areas = edge_geom_series.loc[chunk.index].area.round(2)
+        overlap_areas = intersection_series.area.round(2)
+
+    proportions = (overlap_areas / edge_areas).where(edge_areas > 0, 0).round(4)
+    full_lengths = pd.to_numeric(chunk[edge_length_col], errors="coerce")
+
+    chunk["geometry"] = intersection_series
+    chunk["zone_edge_proportion"] = proportions
+    chunk["edge_link_length_m"] = full_lengths.round(2)
+    chunk["zone_link_length_m"] = (full_lengths * proportions).round(2)
+    return chunk
+
+
+def intersect_road_polygons_with_zones(
+    road_network,
+    road_network_epsg,
+    zones,
+    output_path=None,
+    output_epsg=None,
+    prefilter_zones_to_network_bbox=True,
+    edge_length_col=None,
+):
+    """Intersect rectangular/polygon road links with zone polygons.
+
+    This variant is for area-based road links, for example buffered or
+    rectangular road segments. ``zone_edge_proportion`` is computed as the
+    overlap area divided by the full road-link polygon area. That proportion is
+    then applied to the full link length to derive ``zone_link_length_m``.
+
+    By default it first filters zones to the overall road-network bounding box
+    before exact intersection. That prefilter uses the same progress-bar path
+    as the line-based workflow.
+    """
+    _require_projected_epsg(road_network_epsg)
+    edges_gdf = _load_edges(road_network)
+    polygons_gdf = _load_zones(zones)
+
+    if output_epsg is None:
+        output_epsg = road_network_epsg
+
+    length_col = _infer_edge_length_col(edges_gdf, edge_length_col=edge_length_col)
+    cache_metadata = _intersection_cache_metadata(
+        road_network=road_network,
+        road_network_epsg=road_network_epsg,
+        zones=zones,
+        output_epsg=output_epsg,
+        prefilter_zones_to_network_bbox=prefilter_zones_to_network_bbox,
+    )
+    cached_result = _try_load_cached_intersection(output_path, {**cache_metadata, "polygon_mode": True, "edge_length_col": length_col})
+    if cached_result is not None:
+        return cached_result
+
+    logger.info("Projecting geometries to EPSG:%d", road_network_epsg)
+    edges_proj = _project_if_needed(edges_gdf, road_network_epsg)
+    polys_proj = _project_if_needed(polygons_gdf, road_network_epsg)
+
+    if prefilter_zones_to_network_bbox and len(polys_proj):
+        polys_proj = _prefilter_zones_to_network_bbox(polys_proj, edges_proj)
+
+    edge_attr_cols = [c for c in edges_gdf.columns if c != "geometry"]
+    zone_attr_cols = [c for c in polygons_gdf.columns if c != "geometry"]
+
+    logger.info("Intersecting %d zones with %d polygon road links", len(polys_proj), len(edges_proj))
+    edges_indexed = edges_proj.reset_index(drop=True).reset_index(names="__edge_idx")
+    polys_indexed = polys_proj.reset_index(drop=True).reset_index(names="__zone_idx")
+
+    pairs = gpd.sjoin(
+        edges_indexed[["__edge_idx", "geometry"]],
+        polys_indexed[["__zone_idx", "geometry"]],
+        how="inner",
+        predicate="intersects",
+    )
+    pairs = pairs.rename(columns={"geometry": "edge_geometry"}).drop(columns=["index_right"])
+
+    if len(pairs) == 0:
+        if prefilter_zones_to_network_bbox and len(polys_proj):
+            voided = _build_void_rows(polys_proj, edge_attr_cols, zone_attr_cols, output_epsg)
+            if output_path:
+                from osm_chordify.utils.io import save_geodataframe
+                save_geodataframe(voided, output_path)
+                _write_intersection_cache_metadata(output_path, {**cache_metadata, "polygon_mode": True, "edge_length_col": length_col})
+            return voided
+        return gpd.GeoDataFrame(
+            columns=["zone_edge_proportion", "edge_link_length_m", "zone_link_length_m", "geometry"],
+            geometry="geometry",
+            crs=output_epsg,
+        )
+
+    matched = pairs.merge(
+        edges_indexed.drop(columns=["geometry"]),
+        on="__edge_idx",
+        how="left",
+    ).merge(
+        polys_indexed.rename(columns={"geometry": "zone_geometry"}),
+        on="__zone_idx",
+        how="left",
+    )
+
+    exact_parts = []
+    with tqdm(
+        total=len(matched),
+        desc="Computing polygon intersections",
+        unit="pair",
+        dynamic_ncols=True,
+        leave=True,
+        mininterval=0.5,
+    ) as pbar:
+        for start in range(0, len(matched), INTERSECTION_CHUNK_SIZE):
+            chunk = matched.iloc[start:start + INTERSECTION_CHUNK_SIZE].copy()
+            chunk_result = _compute_polygon_intersection_chunk(chunk, road_network_epsg, length_col)
+            if not chunk_result.empty:
+                exact_parts.append(chunk_result)
+            pbar.update(len(chunk))
+            pbar.set_postfix_str(
+                f"hit_zones={pairs['__zone_idx'].nunique()}, pieces={sum(len(p) for p in exact_parts)}, edge_hits={len(pairs)}"
+            )
+
+    if not exact_parts:
+        return gpd.GeoDataFrame(
+            columns=["zone_edge_proportion", "edge_link_length_m", "zone_link_length_m", "geometry"],
+            geometry="geometry",
+            crs=output_epsg,
+        )
+
+    matched_all = gpd.GeoDataFrame(pd.concat(exact_parts, ignore_index=True), geometry="geometry", crs=road_network_epsg)
+    result_gdf = _build_result_gdf(matched_all, edge_attr_cols, zone_attr_cols, road_network_epsg)
+    if prefilter_zones_to_network_bbox and "__zone_idx" in matched_all.columns:
+        matched_zone_indices = set(matched_all["__zone_idx"].unique())
+        missing_zone_rows = polys_indexed.loc[~polys_indexed["__zone_idx"].isin(matched_zone_indices)]
+        if len(missing_zone_rows):
+            voided = _build_void_rows(missing_zone_rows, edge_attr_cols, zone_attr_cols, road_network_epsg)
+            result_gdf = gpd.GeoDataFrame(pd.concat([result_gdf, voided], ignore_index=True), geometry="geometry", crs=road_network_epsg)
+
+    if output_epsg != road_network_epsg:
+        result_gdf = result_gdf.to_crs(epsg=output_epsg)
+
+    if output_path:
+        from osm_chordify.utils.io import save_geodataframe
+        save_geodataframe(result_gdf, output_path)
+        _write_intersection_cache_metadata(output_path, {**cache_metadata, "polygon_mode": True, "edge_length_col": length_col})
+        logger.info("Saved polygon-road intersection to %s", output_path)
 
     return result_gdf
 
