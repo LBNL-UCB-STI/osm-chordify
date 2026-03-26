@@ -9,6 +9,7 @@
 import logging
 import os
 import json
+import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -468,9 +469,25 @@ def _chunk_slices(total, chunk_size):
         yield start, min(start + chunk_size, total)
 
 
-def _screen_crosses_boundary_chunk(geoms, boundary_union):
-    """Return boolean intersects(boundary_union) for one geometry chunk."""
-    return geoms.intersects(boundary_union)
+def _screen_crosses_boundary_chunk(geoms, boundaries_indexed, geom_id_col):
+    """Return boolean intersects(boundary) for one geometry chunk using spatial join screening."""
+    if len(geoms) == 0:
+        return pd.Series(dtype=bool)
+
+    geom_chunk = gpd.GeoDataFrame(
+        {geom_id_col: geoms.index},
+        geometry=geoms.values,
+        crs=getattr(geoms, "crs", None),
+        index=geoms.index,
+    )
+    candidate_hits = gpd.sjoin(
+        geom_chunk[[geom_id_col, "geometry"]],
+        boundaries_indexed[["geometry"]],
+        how="left",
+        predicate="intersects",
+    )
+    matched_ids = set(candidate_hits.loc[candidate_hits["index_right"].notna(), geom_id_col])
+    return pd.Series(geom_chunk[geom_id_col].isin(matched_ids).values, index=geom_chunk.index)
 
 
 def _compute_chunk_worker(func, chunk, epsg, metric_names, length_col):
@@ -632,19 +649,36 @@ def intersect_road_network_with_zones(
     polys_indexed = polys_proj.reset_index(drop=True).reset_index(names="__zone_idx")
     direct_matches = None
     crossing_edges = edges_indexed
+    county_timing_active = _is_county_like_zones(polys_indexed)
 
-    if _is_county_like_zones(polys_indexed):
+    if county_timing_active:
         logger.info("Using county fast path for non-boundary-crossing edges")
-        boundaries = polys_indexed.geometry.boundary
-        boundary_union = boundaries.union_all() if hasattr(boundaries, "union_all") else boundaries.unary_union
+        boundary_screen_started = time.perf_counter()
+        boundaries_indexed = gpd.GeoDataFrame(
+            geometry=polys_indexed.geometry.boundary,
+            crs=road_network_epsg,
+        ).reset_index(drop=True)
         cross_masks = []
         for start, end in _chunk_slices(len(edges_indexed), COUNTY_BOUNDARY_SCREEN_CHUNK_SIZE):
-            cross_masks.append(_screen_crosses_boundary_chunk(edges_indexed.geometry.iloc[start:end], boundary_union))
+            cross_masks.append(
+                _screen_crosses_boundary_chunk(
+                    edges_indexed.geometry.iloc[start:end],
+                    boundaries_indexed,
+                    "__edge_idx",
+                )
+            )
         crosses_boundary = pd.concat(cross_masks, ignore_index=True) if cross_masks else pd.Series(dtype=bool)
         contained_edges = edges_indexed.loc[~crosses_boundary].copy()
         crossing_edges = edges_indexed.loc[crosses_boundary].copy()
+        logger.info(
+            "County fast path boundary screening finished in %.2fs: %d contained, %d crossing",
+            time.perf_counter() - boundary_screen_started,
+            len(contained_edges),
+            len(crossing_edges),
+        )
 
         if not contained_edges.empty:
+            direct_assign_started = time.perf_counter()
             reps = contained_edges.copy()
             reps["geometry"] = reps.geometry.representative_point()
             direct_matches = gpd.sjoin(
@@ -669,6 +703,11 @@ def intersect_road_network_with_zones(
             direct_matches[metric_names["edge_length"]] = edge_lengths
             direct_matches[metric_names["zone_length"]] = edge_lengths
             direct_matches[metric_names["proportion"]] = 1.0
+            logger.info(
+                "County fast path direct assignment finished in %.2fs: %d rows",
+                time.perf_counter() - direct_assign_started,
+                len(direct_matches),
+            )
 
     pairs = gpd.sjoin(
         crossing_edges[["__edge_idx", "geometry"]],
@@ -719,6 +758,7 @@ def intersect_road_network_with_zones(
 
     exact_parts = []
     if len(pairs):
+        exact_prep_started = time.perf_counter()
         matched = pairs.merge(
             edges_indexed.drop(columns=["geometry"]),
             on="__edge_idx",
@@ -728,6 +768,13 @@ def intersect_road_network_with_zones(
             on="__zone_idx",
             how="left",
         )
+        if county_timing_active:
+            logger.info(
+                "County exact prep finished in %.2fs: %d candidate pairs",
+                time.perf_counter() - exact_prep_started,
+                len(matched),
+            )
+        exact_exec_started = time.perf_counter()
         exact_parts = _compute_chunked_exact_parts(
             matched=matched,
             epsg=road_network_epsg,
@@ -735,8 +782,15 @@ def intersect_road_network_with_zones(
             desc="Computing intersections",
             postfix_template=lambda pieces: f"hit_zones={hit_zones}, pieces={pieces}, edge_hits={edge_hits}",
             metric_names=metric_names,
-            enable_parallel=_is_county_like_zones(polys_indexed),
+            enable_parallel=county_timing_active,
         )
+        if county_timing_active:
+            logger.info(
+                "County exact execution finished in %.2fs: %d output rows across %d chunks",
+                time.perf_counter() - exact_exec_started,
+                sum(len(part) for part in exact_parts),
+                len(exact_parts),
+            )
 
     frames = []
     if direct_matches is not None and not direct_matches.empty:
@@ -753,6 +807,7 @@ def intersect_road_network_with_zones(
             crs=output_epsg,
         )
 
+    assemble_started = time.perf_counter()
     matched_all = gpd.GeoDataFrame(
         frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True),
         geometry="geometry",
@@ -780,6 +835,12 @@ def intersect_road_network_with_zones(
             )
             result_gdf = pd.concat([result_gdf, voided], ignore_index=True)
             result_gdf = gpd.GeoDataFrame(result_gdf, geometry="geometry", crs=road_network_epsg)
+    if county_timing_active:
+        logger.info(
+            "County result assembly finished in %.2fs: %d total rows",
+            time.perf_counter() - assemble_started,
+            len(result_gdf),
+        )
 
     logger.info(
         "Intersection produced %d results across %d/%d zones (edge hits=%d)",
@@ -1203,19 +1264,36 @@ def intersect_polygons_with_zones(
     zones_indexed = zones_proj.reset_index(drop=True).reset_index(names="__zone_idx")
     direct_matches = None
     crossing_polygons = polygons_indexed
+    county_timing_active = _is_county_like_zones(zones_indexed)
 
-    if _is_county_like_zones(zones_indexed):
+    if county_timing_active:
         logger.info("Using county fast path for non-boundary-crossing polygon pieces")
-        boundaries = zones_indexed.geometry.boundary
-        boundary_union = boundaries.union_all() if hasattr(boundaries, "union_all") else boundaries.unary_union
+        boundary_screen_started = time.perf_counter()
+        boundaries_indexed = gpd.GeoDataFrame(
+            geometry=zones_indexed.geometry.boundary,
+            crs=polygons_epsg,
+        ).reset_index(drop=True)
         cross_masks = []
         for start, end in _chunk_slices(len(polygons_indexed), COUNTY_BOUNDARY_SCREEN_CHUNK_SIZE):
-            cross_masks.append(_screen_crosses_boundary_chunk(polygons_indexed.geometry.iloc[start:end], boundary_union))
+            cross_masks.append(
+                _screen_crosses_boundary_chunk(
+                    polygons_indexed.geometry.iloc[start:end],
+                    boundaries_indexed,
+                    "__poly_idx",
+                )
+            )
         crosses_boundary = pd.concat(cross_masks, ignore_index=True) if cross_masks else pd.Series(dtype=bool)
         contained_polygons = polygons_indexed.loc[~crosses_boundary].copy()
         crossing_polygons = polygons_indexed.loc[crosses_boundary].copy()
+        logger.info(
+            "County fast path boundary screening finished in %.2fs: %d contained, %d crossing",
+            time.perf_counter() - boundary_screen_started,
+            len(contained_polygons),
+            len(crossing_polygons),
+        )
 
         if not contained_polygons.empty:
+            direct_assign_started = time.perf_counter()
             reps = contained_polygons.copy()
             reps["geometry"] = reps.geometry.representative_point()
             direct_matches = gpd.sjoin(
@@ -1249,6 +1327,11 @@ def intersect_polygons_with_zones(
             direct_matches[metric_names["zone_length"]] = piece_lengths
             direct_matches[metric_names["piece_surface"]] = polygon_areas
             direct_matches[metric_names["zone_surface"]] = polygon_areas
+            logger.info(
+                "County fast path direct assignment finished in %.2fs: %d rows",
+                time.perf_counter() - direct_assign_started,
+                len(direct_matches),
+            )
 
     pairs = gpd.sjoin(
         crossing_polygons[["__poly_idx", "geometry"]],
@@ -1286,18 +1369,25 @@ def intersect_polygons_with_zones(
             crs=output_epsg,
         )
 
-    matched = pairs.merge(
-        polygons_indexed.drop(columns=["geometry"]),
-        on="__poly_idx",
-        how="left",
-    ).merge(
-        zones_indexed.rename(columns={"geometry": "zone_geometry"}),
-        on="__zone_idx",
-        how="left",
-    )
-
     exact_parts = []
     if len(pairs):
+        exact_prep_started = time.perf_counter()
+        matched = pairs.merge(
+            polygons_indexed.drop(columns=["geometry"]),
+            on="__poly_idx",
+            how="left",
+        ).merge(
+            zones_indexed.rename(columns={"geometry": "zone_geometry"}),
+            on="__zone_idx",
+            how="left",
+        )
+        if county_timing_active:
+            logger.info(
+                "County exact prep finished in %.2fs: %d candidate pairs",
+                time.perf_counter() - exact_prep_started,
+                len(matched),
+            )
+        exact_exec_started = time.perf_counter()
         exact_parts = _compute_chunked_exact_parts(
             matched=matched,
             epsg=polygons_epsg,
@@ -1306,8 +1396,15 @@ def intersect_polygons_with_zones(
             postfix_template=lambda pieces: f"hit_zones={pairs['__zone_idx'].nunique()}, pieces={pieces}, poly_hits={len(pairs)}",
             metric_names=metric_names,
             length_col=piece_length_col,
-            enable_parallel=_is_county_like_zones(zones_indexed),
+            enable_parallel=county_timing_active,
         )
+        if county_timing_active:
+            logger.info(
+                "County exact execution finished in %.2fs: %d output rows across %d chunks",
+                time.perf_counter() - exact_exec_started,
+                sum(len(part) for part in exact_parts),
+                len(exact_parts),
+            )
 
     frames = []
     if direct_matches is not None and not direct_matches.empty:
@@ -1329,6 +1426,7 @@ def intersect_polygons_with_zones(
             crs=output_epsg,
         )
 
+    assemble_started = time.perf_counter()
     matched_all = gpd.GeoDataFrame(
         frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True),
         geometry="geometry",
@@ -1355,6 +1453,12 @@ def intersect_polygons_with_zones(
                 zone_label=zone_label,
             )
             result_gdf = gpd.GeoDataFrame(pd.concat([result_gdf, voided], ignore_index=True), geometry="geometry", crs=polygons_epsg)
+    if county_timing_active:
+        logger.info(
+            "County result assembly finished in %.2fs: %d total rows",
+            time.perf_counter() - assemble_started,
+            len(result_gdf),
+        )
 
     if output_epsg != polygons_epsg:
         result_gdf = result_gdf.to_crs(epsg=output_epsg)
