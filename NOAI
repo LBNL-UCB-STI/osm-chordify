@@ -1,16 +1,1 @@
-No AI Training or Model Improvement Use
-
-The contents of this repository, including source code, documentation,
-configuration files, examples, tests, and any other materials, may not be
-used to train, fine-tune, evaluate, benchmark, or otherwise improve machine
-learning or artificial intelligence models without prior written permission
-from the repository owner(s).
-
-This restriction also applies to:
-
-- creating datasets derived from this repository for model training or evaluation
-- using repository contents in retrieval pipelines for model development
-- using repository contents to improve coding assistants, copilots, or similar systems
-
-If you want to request permission for such use, contact the repository
-owner(s) directly.
+This repository opts out of AI/ML training dataset inclusion.
