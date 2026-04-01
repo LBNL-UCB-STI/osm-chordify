@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import LineString, Point, Polygon
 import json
+import warnings
 
 from osm_chordify.main import build_area_mask_from_counties, intersect_road_network_with_county_zones
 from osm_chordify.osm.intersect import (
@@ -11,6 +12,15 @@ from osm_chordify.osm.intersect import (
     intersect_road_polygons_with_zones,
     spatial_left_join_with_zones,
     intersect_zones_with_zones,
+    _infer_edge_length_col,
+    _infer_polygon_piece_length_col,
+    _load_edges,
+    _load_zones,
+    _project_if_needed,
+    _try_load_cached_intersection,
+    _write_intersection_cache_metadata,
+    _zone_output_name,
+    load_osm_edges,
 )
 
 
@@ -115,6 +125,61 @@ def test_intersection_rejects_geographic_working_crs():
         )
 
 
+def test_load_edges_and_zones_reject_non_path_non_gdf_inputs():
+    with pytest.raises(TypeError, match="road_network must be a GeoDataFrame or a file path"):
+        _load_edges(123)
+    with pytest.raises(TypeError, match="zones must be a GeoDataFrame or a file path"):
+        _load_zones(123)
+
+
+def test_load_osm_edges_raises_when_required_columns_are_missing(tmp_path):
+    gpkg_path = tmp_path / "bad_edges.gpkg"
+    bad_edges = gpd.GeoDataFrame(
+        {
+            "osmid": [1],
+            "length": [10.0],
+            "geometry": [LineString([(0, 0), (1, 0)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    bad_edges.to_file(gpkg_path, layer="edges", driver="GPKG")
+
+    with pytest.raises(ValueError, match="missing 'edge_id' column"):
+        load_osm_edges(gpkg_path)
+
+
+def test_project_if_needed_reuses_matching_crs_and_reprojects_when_needed():
+    gdf = gpd.GeoDataFrame(
+        {"id": [1], "geometry": [LineString([(0, 0), (1, 0)])]},
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    same = _project_if_needed(gdf, 3857)
+    reproj = _project_if_needed(gdf, 4326)
+
+    assert same is gdf
+    assert reproj.crs.to_epsg() == 4326
+
+
+def test_zone_output_name_uses_incrementing_suffix_for_collisions():
+    existing = {"zone_name", "zone2_name", "zone3_name"}
+    assert _zone_output_name("name", existing, prefix="zone") == "zone4_name"
+
+
+def test_intersection_cache_returns_none_for_bad_or_mismatched_sidecar(tmp_path):
+    output_path = tmp_path / "cached.geojson"
+    meta = {"schema_version": 3, "road_network_epsg": 3857}
+
+    assert _try_load_cached_intersection(output_path, meta) is None
+    output_path.write_text("{}", encoding="utf-8")
+    assert _try_load_cached_intersection(output_path, meta) is None
+
+    _write_intersection_cache_metadata(output_path, {"schema_version": 999})
+    assert _try_load_cached_intersection(output_path, meta) is None
+
+
 def test_intersection_can_prefilter_zones_to_network_bbox(monkeypatch):
     edges = gpd.GeoDataFrame(
         {
@@ -216,12 +281,14 @@ def test_bbox_prefilter_keeps_voided_rows_for_bbox_cells_without_link_pieces():
         crs="EPSG:3857",
     )
 
-    result = intersect_road_network_with_zones(
-        road_network=edges,
-        road_network_epsg=3857,
-        zones=zones,
-        prefilter_zones_to_network_bbox=True,
-    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        result = intersect_road_network_with_zones(
+            road_network=edges,
+            road_network_epsg=3857,
+            zones=zones,
+            prefilter_zones_to_network_bbox=True,
+        )
 
     assert set(result["zone_zone_id"]) == {"hit", "voided"}
     voided = result[result["zone_zone_id"] == "voided"].iloc[0]
@@ -566,12 +633,14 @@ def test_intersect_road_polygons_with_zones_prefilter_keeps_void_rows():
         crs="EPSG:3857",
     )
 
-    result = intersect_road_polygons_with_zones(
-        road_network=road_polygons,
-        road_network_epsg=3857,
-        zones=zones,
-        prefilter_zones_to_network_bbox=True,
-    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        result = intersect_road_polygons_with_zones(
+            road_network=road_polygons,
+            road_network_epsg=3857,
+            zones=zones,
+            prefilter_zones_to_network_bbox=True,
+        )
 
     assert set(result["zone_zone_id"]) == {"hit", "voided"}
     voided = result[result["zone_zone_id"] == "voided"].iloc[0]
@@ -619,6 +688,39 @@ def test_intersect_road_polygons_with_zones_prefilters_to_bbox_by_default(monkey
 
     assert len(result) == 1
     assert calls["count"] == 1
+
+
+def test_intersect_road_polygons_with_zones_reprojects_and_saves_output(tmp_path):
+    road_polygons = gpd.GeoDataFrame(
+        {
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [Polygon([(0, 0), (10, 0), (10, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["hit"],
+            "geometry": [Polygon([(0, 0), (5, 0), (5, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    output_path = tmp_path / "road_polygons.geojson"
+
+    result = intersect_road_polygons_with_zones(
+        road_network=road_polygons,
+        road_network_epsg=3857,
+        zones=zones,
+        output_epsg=4326,
+        output_path=output_path,
+    )
+
+    assert output_path.exists()
+    assert result.crs.to_epsg() == 4326
+    assert (tmp_path / "road_polygons.geojson.cache.json").exists()
 
 
 def test_intersect_polygons_with_zones_preserves_existing_columns_and_recomputes_piece_metrics():
@@ -695,6 +797,50 @@ def test_intersect_polygons_with_zones_uses_county_fast_path_for_contained_piece
     assert result.iloc[0]["county_zone_piece_length_m"] == pytest.approx(10.0, abs=1e-6)
 
 
+def test_intersect_polygons_with_zones_rejects_missing_piece_length_column():
+    polygons = gpd.GeoDataFrame(
+        {
+            "piece_id": [1],
+            "geometry": [Polygon([(0, 0), (4, 0), (4, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["z1"],
+            "geometry": [Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    with pytest.raises(ValueError, match="polygon cascade inputs must include a length column"):
+        intersect_polygons_with_zones(
+            polygons=polygons,
+            polygons_epsg=3857,
+            zones=zones,
+        )
+
+
+def test_length_inference_helpers_raise_for_missing_explicit_columns():
+    edges = gpd.GeoDataFrame(
+        {"edge_length": [10.0], "geometry": [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])]},
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    polygons = gpd.GeoDataFrame(
+        {"zone_link_length_m": [10.0], "geometry": [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])]},
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    with pytest.raises(ValueError, match="missing requested edge length column"):
+        _infer_edge_length_col(edges, edge_length_col="nope")
+    with pytest.raises(ValueError, match="missing requested piece length column"):
+        _infer_polygon_piece_length_col(polygons, piece_length_col="nope")
+
+
 def test_spatial_left_join_with_zones_keeps_unmatched_rows_with_null_zone_fields():
     pieces = gpd.GeoDataFrame(
         {
@@ -728,6 +874,38 @@ def test_spatial_left_join_with_zones_keeps_unmatched_rows_with_null_zone_fields
     unmatched = result[result["piece_id"] == 2].iloc[0]
     assert matched["county_COUNTYFP"] == "001"
     assert pd.isna(unmatched["county_COUNTYFP"])
+
+
+def test_spatial_left_join_with_zones_reprojects_and_saves_output(tmp_path):
+    pieces = gpd.GeoDataFrame(
+        {
+            "piece_id": [1],
+            "geometry": [Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["z1"],
+            "geometry": [Polygon([(0, 0), (3, 0), (3, 3), (0, 3)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    output_path = tmp_path / "left_join.geojson"
+
+    result = spatial_left_join_with_zones(
+        gdf=pieces,
+        gdf_epsg=3857,
+        zones=zones,
+        output_epsg=4326,
+        output_path=output_path,
+    )
+
+    assert output_path.exists()
+    assert result.crs.to_epsg() == 4326
+    assert result.iloc[0]["zone_zone_id"] == "z1"
 
 
 def test_intersection_preserves_prior_prefixed_columns_without_edge_stacking():
@@ -765,6 +943,57 @@ def test_intersection_preserves_prior_prefixed_columns_without_edge_stacking():
     assert "zone2_NAME" in result.columns
     assert result.iloc[0]["zone_NAME"] == "old_zone"
     assert result.iloc[0]["zone2_NAME"] == "new_zone"
+
+
+def test_chained_intersections_do_not_double_zone_label_prefixes():
+    edges = gpd.GeoDataFrame(
+        {
+            "osm_id": [1],
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [LineString([(0, 0), (10, 0)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    inmap_zones = gpd.GeoDataFrame(
+        {
+            "inmap_cell_id": ["i1"],
+            "geometry": [Polygon([(0, -1), (10, -1), (10, 1), (0, 1)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    aermod_zones = gpd.GeoDataFrame(
+        {
+            "aermod_cell_id": ["a1"],
+            "geometry": [Polygon([(0, -1), (5, -1), (5, 1), (0, 1)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    first = intersect_road_network_with_zones(
+        road_network=edges,
+        road_network_epsg=3857,
+        zones=inmap_zones,
+        zone_label="inmap",
+    )
+    second = intersect_road_network_with_zones(
+        road_network=first,
+        road_network_epsg=3857,
+        zones=aermod_zones,
+        zone_label="aermod",
+    )
+
+    assert "inmap_inmap_cell_id" not in first.columns
+    assert "aermod_aermod_cell_id" not in second.columns
+    assert "edge_inmap_inmap_cell_id" not in second.columns
+    assert "inmap_cell_id" in first.columns
+    assert "aermod_cell_id" in second.columns
+    assert "edge_inmap_cell_id" in second.columns
+    assert second.iloc[0]["aermod_cell_id"] == "a1"
+    assert second.iloc[0]["edge_inmap_cell_id"] == "i1"
 
 
 def test_intersection_loads_parquet_inputs(tmp_path):
@@ -849,6 +1078,40 @@ def test_intersection_reuses_cached_output(monkeypatch, tmp_path):
     )
     assert len(second) == 1
     assert second.iloc[0]["zone_edge_proportion"] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_intersection_reprojects_and_saves_output(tmp_path):
+    edges = gpd.GeoDataFrame(
+        {
+            "osm_id": [1],
+            "edge_id": [101],
+            "edge_length": [10.0],
+            "geometry": [LineString([(0, 0), (10, 0)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones = gpd.GeoDataFrame(
+        {
+            "zone_id": ["A"],
+            "geometry": [Polygon([(0, -1), (5, -1), (5, 1), (0, 1)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    output_path = tmp_path / "reprojected_intersection.geojson"
+
+    result = intersect_road_network_with_zones(
+        road_network=edges,
+        road_network_epsg=3857,
+        zones=zones,
+        output_epsg=4326,
+        output_path=output_path,
+    )
+
+    assert output_path.exists()
+    assert result.crs.to_epsg() == 4326
+    assert (tmp_path / "reprojected_intersection.geojson.cache.json").exists()
 
 
 def test_intersect_zones_with_zones_returns_prefixed_polygon_overlaps():
@@ -946,6 +1209,35 @@ def test_intersect_zones_with_zones_saves_output(tmp_path):
     assert len(loaded) == 1
     assert loaded.iloc[0]["zone_a_county_id"] == "001"
     assert loaded.iloc[0]["zone_b_grid_id"] == "cell-1"
+
+
+def test_intersect_zones_with_zones_reprojects_output(tmp_path):
+    zones_a = gpd.GeoDataFrame(
+        {
+            "county_id": ["001"],
+            "geometry": [Polygon([(0, 0), (4, 0), (4, 4), (0, 4)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+    zones_b = gpd.GeoDataFrame(
+        {
+            "grid_id": ["cell-1"],
+            "geometry": [Polygon([(2, 2), (6, 2), (6, 6), (2, 6)])],
+        },
+        geometry="geometry",
+        crs="EPSG:3857",
+    )
+
+    result = intersect_zones_with_zones(
+        zones_a=zones_a,
+        zones_a_epsg=3857,
+        zones_b=zones_b,
+        zones_b_epsg=3857,
+        output_epsg=4326,
+    )
+
+    assert result.crs.to_epsg() == 4326
 
 
 def test_intersect_zones_with_zones_loads_parquet_inputs(tmp_path):

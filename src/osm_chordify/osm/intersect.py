@@ -235,6 +235,8 @@ def _edge_output_name(col):
 
 def _zone_output_name(col, existing_keys, prefix="zone"):
     """Prefix zone attributes and avoid collisions with carried-through columns."""
+    if prefix not in {None, "", "zone"} and col.startswith(f"{prefix}_") and col not in existing_keys:
+        return col
     candidate = f"{prefix}_{col}"
     if candidate not in existing_keys:
         return candidate
@@ -378,6 +380,27 @@ def _build_void_rows(zones, edge_attr_cols, zone_attr_cols, crs, metric_names=No
             existing_keys.add(out_col)
 
     return gpd.GeoDataFrame(result_data, geometry="geometry", crs=crs)[result_cols]
+
+
+def _append_geodataframe_rows(base, extra, crs):
+    """Append GeoDataFrame rows without dtype-guessing warnings from all-NA placeholder rows."""
+    if extra.empty:
+        return base
+    if base.empty:
+        return gpd.GeoDataFrame(extra.copy(), geometry="geometry", crs=crs)
+
+    extra_aligned = extra.reindex(columns=base.columns).copy()
+    combined_data = {}
+    for col in base.columns:
+        if col == "geometry":
+            combined_data[col] = gpd.GeoSeries(
+                pd.concat([base[col], extra_aligned[col]], ignore_index=True),
+                crs=crs,
+            )
+            continue
+        combined_data[col] = pd.concat([base[col], extra_aligned[col]], ignore_index=True)
+
+    return gpd.GeoDataFrame(combined_data, geometry="geometry", crs=crs)[base.columns]
 
 
 def _compute_intersection_chunk(chunk, crs, metric_names=None):
@@ -833,8 +856,7 @@ def intersect_road_network_with_zones(
                 metric_names=metric_names,
                 zone_label=zone_label,
             )
-            result_gdf = pd.concat([result_gdf, voided], ignore_index=True)
-            result_gdf = gpd.GeoDataFrame(result_gdf, geometry="geometry", crs=road_network_epsg)
+            result_gdf = _append_geodataframe_rows(result_gdf, voided, road_network_epsg)
     if county_timing_active:
         logger.info(
             "County result assembly finished in %.2fs: %d total rows",
@@ -1195,7 +1217,7 @@ def intersect_road_polygons_with_zones(
                 metric_names=metric_names,
                 zone_label=zone_label,
             )
-            result_gdf = gpd.GeoDataFrame(pd.concat([result_gdf, voided], ignore_index=True), geometry="geometry", crs=road_network_epsg)
+            result_gdf = _append_geodataframe_rows(result_gdf, voided, road_network_epsg)
 
     if output_epsg != road_network_epsg:
         result_gdf = result_gdf.to_crs(epsg=output_epsg)
@@ -1452,7 +1474,7 @@ def intersect_polygons_with_zones(
                 metric_names=metric_names,
                 zone_label=zone_label,
             )
-            result_gdf = gpd.GeoDataFrame(pd.concat([result_gdf, voided], ignore_index=True), geometry="geometry", crs=polygons_epsg)
+            result_gdf = _append_geodataframe_rows(result_gdf, voided, polygons_epsg)
     if county_timing_active:
         logger.info(
             "County result assembly finished in %.2fs: %d total rows",
